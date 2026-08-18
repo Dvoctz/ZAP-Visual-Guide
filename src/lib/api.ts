@@ -45,7 +45,7 @@ export async function generateOpenAIPoseReference(
     environmentName?: string;
   };
 }> {
-  const response = await fetch('/api/generate-openai-pose-reference', {
+  const startRes = await fetch('/api/generate-openai-pose-reference', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -82,20 +82,56 @@ export async function generateOpenAIPoseReference(
     }),
   });
 
-  if (!response.ok) {
-    let errorMsg = 'Unable to generate the reference image.';
+  if (!startRes.ok) {
+    let errorMsg = 'Unable to start reference image generation.';
     try {
-      const errData = await response.json();
+      const errData = await startRes.json();
       if (errData?.error) {
         errorMsg = errData.error;
       }
-    } catch {
-      // fallback
-    }
+    } catch {}
     throw new Error(errorMsg);
   }
 
-  return response.json();
+  const startData = await startRes.json();
+  const jobId = startData.jobId;
+  if (!jobId) {
+    throw new Error('Failed to obtain workflow job ID for reference generation.');
+  }
+
+  // Poll status endpoint every 3 seconds (up to 30 attempts = 90s)
+  const maxAttempts = 30;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    const statusRes = await fetch(`/api/pose-reference-status/${jobId}`);
+    if (!statusRes.ok) continue;
+
+    const statusData = await statusRes.json();
+    if (statusData.status === 'completed') {
+      if (!statusData.image) {
+        throw new Error('Workflow completed but did not return an image URL.');
+      }
+      return {
+        success: true,
+        referenceImage: {
+          type: 'ai',
+          provider: 'openai',
+          model: statusData.metadata?.model || 'gpt-image-2',
+          url: statusData.image,
+          generatedAt: new Date().toISOString(),
+          promptUsed: prompt || pose.title,
+          environmentId: environment?.id,
+          environmentName: environment?.name,
+        },
+      };
+    } else if (statusData.status === 'failed') {
+      throw new Error(statusData.error || 'Reference generation workflow failed.');
+    }
+    // If queued or running, continue polling
+  }
+
+  throw new Error('Reference image generation timed out while waiting for workflow completion.');
 }
 
 export async function generateShootGuide(event: ShootEvent): Promise<{

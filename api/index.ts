@@ -1,6 +1,8 @@
 import express from 'express';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
+import { start, getRun } from 'workflow/api';
+import { generatePoseReferenceWorkflow } from '../workflows/poseReferenceWorkflow.js';
 
 dotenv.config();
 
@@ -58,7 +60,7 @@ app.get(['/api/providers/openai/status', '/providers/openai/status'], (req, res)
   res.json({ connected });
 });
 
-// Generate reference image for a single pose using OpenAI gpt-image-2
+// Generate reference image for a single pose using Vercel Workflow and OpenAI gpt-image-2 asynchronously
 app.post(['/api/generate-openai-pose-reference', '/generate-openai-pose-reference'], async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY.trim().length === 0) {
@@ -67,105 +69,72 @@ app.post(['/api/generate-openai-pose-reference', '/generate-openai-pose-referenc
       });
     }
 
-    const { event, pose, overallConcept, prompt: customPrompt, environment } = req.body;
+    const { event, pose, overallConcept, prompt, environment } = req.body;
 
     if (!pose || !pose.title) {
       return res.status(400).json({ error: 'Pose title is required.' });
     }
 
-    const eventName = event?.name || 'Destination Indian Wedding';
-    const eventType = event?.type === 'Custom' ? (event?.customType || 'Couple Shoot') : (event?.type || 'Couple Shoot');
-    const location = event?.location || 'Stone Town, Zanzibar';
-    const style = event?.style || 'Cinematic, Romantic, Editorial';
-    const timeOfDay = event?.timeOfDay || 'Golden Hour';
+    console.log(`[Workflow] Starting pose reference workflow for pose: "${pose.title}"`);
+    const run = await start(generatePoseReferenceWorkflow, [{
+      event,
+      pose,
+      overallConcept,
+      prompt,
+      environment,
+    }]);
 
-    // Use prompt provided by ReferencePromptBuilder or fallback
-    let promptToUse = (customPrompt && typeof customPrompt === 'string' && customPrompt.trim().length > 0)
-      ? customPrompt.trim()
-      : `A professional destination wedding photography reference image created as an exact posing and visual guide.
-Pose: "${pose.title}"
-Direction: "${pose.clientDirection || ''}"
-Concept: "${pose.photographerConcept || ''}"
-Mood: "${pose.mood || style}"
-Event: ${eventName} (${eventType}) at ${location} in ${timeOfDay} light.
-Indian wedding attire with natural fabric drape.
-High-end editorial photograph shot on 35mm/85mm prime lens with natural depth of field and authentic skin textures. No text, logos, or watermarks.`;
-
-    console.log(`[OpenAI Image] Generating reference image for pose: "${pose.title}" with gpt-image-2${environment ? ` [Environment: ${environment.name}]` : ''}`);
-
-    const openai = getOpenAIClient();
-
-    let response: any;
-    try {
-      response = await openai.images.generate({
-        model: 'gpt-image-2',
-        prompt: promptToUse,
-        n: 1,
-        size: '1024x1536' as any,
-      });
-    } catch (err: any) {
-      const msg = err?.message || String(err);
-      console.warn(`[OpenAI Image] First call attempt with 1024x1536 failed:`, msg);
-      if (msg.includes('size') || msg.includes('dimension') || msg.includes('supported values')) {
-        // Retry with 1024x1024 if size was rejected
-        response = await openai.images.generate({
-          model: 'gpt-image-2',
-          prompt: promptToUse,
-          n: 1,
-          size: '1024x1024' as any,
-        });
-      } else {
-        throw err;
-      }
-    }
-
-    let imageDataUrl: string | null = null;
-    const item = response?.data?.[0];
-    if (item?.b64_json) {
-      imageDataUrl = `data:image/png;base64,${item.b64_json}`;
-    } else if (item?.url) {
-      // Fetch image URL and convert to base64 data URL for durable offline client storage in IndexedDB
-      const imgFetch = await fetch(item.url);
-      const arrayBuf = await imgFetch.arrayBuffer();
-      const b64 = Buffer.from(arrayBuf).toString('base64');
-      const cType = imgFetch.headers.get('content-type') || 'image/png';
-      imageDataUrl = `data:${cType};base64,${b64}`;
-    }
-
-    if (!imageDataUrl) {
-      throw new Error('OpenAI did not return image data for this pose.');
-    }
-
-    res.json({
+    return res.json({
       success: true,
-      referenceImage: {
-        type: 'ai',
-        provider: 'openai',
-        model: 'gpt-image-2',
-        url: imageDataUrl,
-        generatedAt: new Date().toISOString(),
-        promptUsed: promptToUse,
-        environmentId: environment?.id,
-        environmentName: environment?.name,
-      },
+      jobId: run.runId,
+      status: 'queued',
     });
   } catch (error: any) {
-    console.error('OpenAI Pose Reference Image Generation Error:', error);
-    let errorMsg = error?.message || String(error);
-    const status = error?.status || error?.statusCode;
+    console.error('Workflow Start Error:', error);
+    const safeMessage = sanitizeError(error?.message || String(error));
+    return res.status(500).json({ error: safeMessage });
+  }
+});
 
-    if (status === 401 || errorMsg.includes('Incorrect API key') || errorMsg.includes('invalid_api_key')) {
-      errorMsg = 'OpenAI is connected incorrectly. Check the OPENAI_API_KEY configuration.';
-    } else if (status === 429 || errorMsg.includes('insufficient_quota') || errorMsg.includes('billing') || errorMsg.includes('credits')) {
-      errorMsg = 'OPENAI API BILLING / CREDIT ERROR: API billing or quota unavailable for this request.';
-    } else if (errorMsg.includes('content_policy_violation') || errorMsg.includes('safety system')) {
-      errorMsg = 'OPENAI IMAGE GENERATION FAILED: Content policy filter triggered.';
-    } else if (!errorMsg.startsWith('OPENAI') && !errorMsg.startsWith('OpenAI')) {
-      errorMsg = `OPENAI IMAGE GENERATION FAILED: ${errorMsg}`;
+// Status check endpoint for workflow job
+app.get(['/api/pose-reference-status/:jobId', '/pose-reference-status/:jobId'], async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    if (!jobId) {
+      return res.status(400).json({ error: 'Job ID is required.' });
     }
 
-    const safeMessage = sanitizeError(errorMsg);
-    res.status(500).json({ error: safeMessage });
+    const run = getRun(jobId);
+    const exists = await run.exists.catch(() => false);
+    if (!exists) {
+      return res.json({ jobId, status: 'queued' });
+    }
+
+    const status = await run.status.catch(() => 'running');
+
+    if (status === 'completed') {
+      const output = (await run.returnValue.catch(() => null)) as any;
+      return res.json({
+        jobId,
+        status: 'completed',
+        image: output?.imageUrl,
+        metadata: {
+          model: output?.model || 'gpt-image-2',
+          size: output?.size || '1024x1024',
+        },
+      });
+    } else if (status === 'failed') {
+      return res.json({
+        jobId,
+        status: 'failed',
+        error: sanitizeError('Workflow execution failed.'),
+      });
+    } else {
+      return res.json({ jobId, status: status || 'running' });
+    }
+  } catch (error: any) {
+    console.error('Workflow Status Check Error:', error);
+    return res.json({ jobId: req.params.jobId, status: 'running' });
   }
 });
 
