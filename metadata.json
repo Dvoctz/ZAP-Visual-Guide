@@ -1,0 +1,6 @@
+{
+  "name": "ZAP Visual Guide",
+  "description": "A focused visual shooting guide application for professional wedding photographers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
