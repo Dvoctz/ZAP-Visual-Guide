@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 
@@ -33,7 +32,7 @@ app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
   // Providers Health Check & Status Endpoint (OpenAI Only)
-  app.get('/api/providers/status', (req, res) => {
+  app.get(['/api/providers/status', '/providers/status'], (req, res) => {
     const hasOpenAI = !!(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0);
 
     res.json({
@@ -55,13 +54,13 @@ app.use(express.urlencoded({ limit: '25mb', extended: true }));
   });
 
   // Dedicated OpenAI status check
-  app.get('/api/providers/openai/status', (req, res) => {
+  app.get(['/api/providers/openai/status', '/providers/openai/status'], (req, res) => {
     const connected = !!(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0);
     res.json({ connected });
   });
 
   // Generate reference image for a single pose using OpenAI gpt-image-2
-  app.post('/api/generate-openai-pose-reference', async (req, res) => {
+  app.post(['/api/generate-openai-pose-reference', '/generate-openai-pose-reference'], async (req, res) => {
     try {
       if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY.trim().length === 0) {
         return res.status(400).json({
@@ -172,9 +171,15 @@ High-end editorial photograph shot on 35mm/85mm prime lens with natural depth of
   });
 
   // Master Shoot Guide Generation API using OpenAI Structured Outputs
-  app.post(['/api/generate-guide', '/api/generate-creative-guide'], async (req, res) => {
+  app.post(['/api/generate-guide', '/api/generate-creative-guide', '/generate-guide', '/generate-creative-guide'], async (req, res) => {
+    const hasKey = !!(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 0);
+    console.log(`[Diagnostic] POST /api/generate-creative-guide: Request received`);
+    console.log(`[Diagnostic] Route reached: ${req.originalUrl || req.url}`);
+    console.log(`[Diagnostic] OPENAI_API_KEY_PRESENT = ${hasKey}`);
+
     try {
-      if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY.trim().length === 0) {
+      if (!hasKey) {
+        console.warn('[Diagnostic] Aborting: OPENAI_API_KEY is not configured in server environment.');
         return res.status(400).json({
           error: 'OpenAI is not connected. Configure OPENAI_API_KEY in the server environment.',
         });
@@ -183,6 +188,7 @@ High-end editorial photograph shot on 35mm/85mm prime lens with natural depth of
       const { eventName, eventType, location, style, timeOfDay, description } = req.body;
 
       if (!eventName || !location) {
+        console.warn('[Diagnostic] Aborting: Missing eventName or location in request body.');
         return res.status(400).json({ error: 'Event name and location are required.' });
       }
 
@@ -345,10 +351,12 @@ Define:
       let lastError: any = null;
       let rawText: string | undefined;
 
+      console.log(`[Diagnostic] OpenAI request started`);
+
       for (const modelName of candidateModels) {
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            console.log(`[OpenAI Guide Generation] Calling model: ${modelName} (attempt ${attempt + 1})`);
+            console.log(`[Diagnostic] Calling model: ${modelName} (attempt ${attempt + 1})`);
             const response = await openai.chat.completions.create({
               model: modelName,
               messages: [
@@ -368,12 +376,12 @@ Define:
             });
             rawText = response.choices?.[0]?.message?.content || undefined;
             if (rawText) {
-              console.log(`[OpenAI Guide Generation] Succeeded with model: ${modelName}`);
+              console.log(`[Diagnostic] OpenAI request completed successfully with model: ${modelName}`);
               break;
             }
           } catch (err: any) {
             lastError = err;
-            console.warn(`[OpenAI Guide Generation] Attempt ${attempt + 1} with ${modelName} failed:`, err?.message);
+            console.warn(`[Diagnostic] Model ${modelName} attempt ${attempt + 1} error:`, err?.name, err?.status, sanitizeError(err?.message || ''));
             if (attempt === 0) {
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
@@ -386,18 +394,20 @@ Define:
         throw lastError || new Error('OpenAI returned an empty response.');
       }
 
+      console.log(`[Diagnostic] OpenAI response parsing started`);
       const result = JSON.parse(rawText.trim());
 
       // Validate structured schema
       if (!result.poses || !Array.isArray(result.poses) || result.poses.length === 0 || !result.colorStyle) {
         throw new Error('OpenAI returned incomplete guide data.');
       }
+      console.log(`[Diagnostic] OpenAI response parsing completed (poses: ${result.poses.length})`);
 
       res.json(result);
     } catch (error: any) {
-      console.error('OpenAI Guide Generation Error:', error);
       let errorMsg = error?.message || String(error);
-      const status = error?.status || error?.statusCode;
+      const status = error?.status || error?.statusCode || 500;
+      const errorType = error?.name || typeof error;
 
       if (status === 401 || errorMsg.includes('Incorrect API key') || errorMsg.includes('invalid_api_key')) {
         errorMsg = 'OpenAI is connected incorrectly. Check the OPENAI_API_KEY configuration.';
@@ -408,12 +418,13 @@ Define:
       }
 
       const safeMessage = sanitizeError(errorMsg);
-      res.status(500).json({ error: safeMessage });
+      console.error(`[Diagnostic] Error caught: type=${errorType}, status=${status}, message=${safeMessage}`);
+      res.status(status === 400 ? 400 : 500).json({ error: safeMessage });
     }
   });
 
   // OpenAI Visual Color Analysis & Structured Lightroom Recipe Generator
-  app.post('/api/analyze-color-preset', async (req, res) => {
+  app.post(['/api/analyze-color-preset', '/analyze-color-preset'], async (req, res) => {
     try {
       if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY.trim().length === 0) {
         return res.status(400).json({
@@ -741,6 +752,7 @@ ${colorStyle ? `Styling Notes: "${colorStyle.overallLook || ''}". Skin: "${color
 
     // Vite middleware for development
     if (process.env.NODE_ENV !== "production") {
+      const { createServer: createViteServer } = await import('vite');
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
