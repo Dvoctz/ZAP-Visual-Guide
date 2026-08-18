@@ -771,8 +771,36 @@ ${colorStyle ? `Styling Notes: "${colorStyle.overallLook || ''}". Skin: "${color
     });
   }
 
-  // Standalone server execution (local dev / container)
-  if (!process.env.VERCEL) {
+  // Determine if server.ts is the directly executed entry point (local dev / container / standalone start)
+  function isDirectExecution(): boolean {
+    // 1. Explicit serverless environment flags - never start server if any are present
+    if (
+      process.env.VERCEL ||
+      process.env.VERCEL_ENV ||
+      process.env.NOW_REGION ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.LAMBDA_TASK_ROOT
+    ) {
+      return false;
+    }
+
+    // 2. Check process.argv entry file
+    if (typeof process !== 'undefined' && process.argv && process.argv[1]) {
+      const script = process.argv[1].replace(/\\/g, '/');
+      // If invoked via Vercel launcher or api entrypoint, do not start standalone server
+      if (script.includes('/api/') || script.includes('___vc_launcher') || script.includes('vercel')) {
+        return false;
+      }
+      // If directly executed as server.ts, server.js, or server.cjs
+      if (/(?:^|\/)server\.(?:ts|js|cjs|mjs)$/i.test(script)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  if (isDirectExecution()) {
     startServer();
   }
 
