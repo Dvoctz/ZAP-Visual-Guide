@@ -1,8 +1,14 @@
 node_modules/
 build/
 dist/
+.output/
+.vercel/
+.workflow-data/
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+/.swc
+
+

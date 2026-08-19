@@ -27,7 +27,17 @@ async function startServer() {
   });
 }
 
-startServer();
+// Only start listening if executed directly (standalone/dev), not when imported as serverless handler
+const isDirectRun = Boolean(
+  process.argv[1] && 
+  (process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.cjs') || process.argv[1].endsWith('server.js'))
+);
+
+if (isDirectRun) {
+  startServer();
+}
 
 export { app };
 export default app;
+
+
