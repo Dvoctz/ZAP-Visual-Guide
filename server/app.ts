@@ -348,23 +348,34 @@ function normalizeImageDataUrl(raw: unknown): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
-  if (trimmed.startsWith('data:image/')) {
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }
 
-  // Handle raw base64 data strings
-  if (trimmed.startsWith('/9j/')) {
-    return `data:image/jpeg;base64,${trimmed}`;
-  }
-  if (trimmed.startsWith('iVBORw0KGgo')) {
-    return `data:image/png;base64,${trimmed}`;
-  }
-  if (trimmed.startsWith('UklGR')) {
-    return `data:image/webp;base64,${trimmed}`;
+  let base64Payload = trimmed;
+  if (trimmed.startsWith('data:')) {
+    const base64Index = trimmed.indexOf(';base64,');
+    if (base64Index !== -1) {
+      base64Payload = trimmed.slice(base64Index + 8).trim();
+    } else {
+      const commaIndex = trimmed.indexOf(',');
+      if (commaIndex !== -1) {
+        base64Payload = trimmed.slice(commaIndex + 1).trim();
+      }
+    }
   }
 
-  // Default raw base64 fallback
-  return `data:image/jpeg;base64,${trimmed}`;
+  if (base64Payload.startsWith('/9j/')) {
+    return `data:image/jpeg;base64,${base64Payload}`;
+  }
+  if (base64Payload.startsWith('iVBORw0KGgo')) {
+    return `data:image/png;base64,${base64Payload}`;
+  }
+  if (base64Payload.startsWith('UklGR')) {
+    return `data:image/webp;base64,${base64Payload}`;
+  }
+
+  throw new Error('Unsupported or malformed image format. Supported formats: JPEG, PNG, WEBP.');
 }
 
 const COLOR_RECIPE_JSON_SCHEMA = `{

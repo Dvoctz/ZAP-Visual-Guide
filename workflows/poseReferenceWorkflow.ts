@@ -70,6 +70,22 @@ High-end editorial photograph shot on 35mm/85mm prime lens with natural depth of
   return { prompt };
 }
 
+function imageDataUrlFromBase64(base64: string): string {
+  if (base64.startsWith('/9j/')) {
+    return `data:image/jpeg;base64,${base64}`;
+  }
+
+  if (base64.startsWith('iVBORw0KGgo')) {
+    return `data:image/png;base64,${base64}`;
+  }
+
+  if (base64.startsWith('UklGR')) {
+    return `data:image/webp;base64,${base64}`;
+  }
+
+  throw new Error('Unsupported generated image format.');
+}
+
 async function callOpenAIImageStep(data: { prompt: string }) {
   "use step";
   const openai = getOpenAIClient();
@@ -87,7 +103,7 @@ async function callOpenAIImageStep(data: { prompt: string }) {
     throw new FatalError("OpenAI did not return image data for this pose reference.");
   }
 
-  const imageUrl = `data:image/png;base64,${item.b64_json}`;
+  const imageUrl = imageDataUrlFromBase64(item.b64_json);
   return {
     imageUrl,
     model: 'gpt-image-2',
