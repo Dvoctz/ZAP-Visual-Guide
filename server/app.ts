@@ -335,28 +335,100 @@ Create a full visual shoot guide with 8-12 diverse, editorial-grade poses flowin
   }
 });
 
-function normalizeImageDataUrl(raw: unknown): string | null {
-  if (!raw || typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  if (trimmed.startsWith('data:image/')) {
-    return trimmed;
+async function resolveImageForVision(raw: unknown): Promise<{
+  dataUrl: string | null;
+  sourceType: 'data-url' | 'remote-url' | 'raw-base64' | 'missing';
+  contentType?: string;
+  byteSize?: number;
+}> {
+  if (!raw || typeof raw !== 'string') {
+    return { dataUrl: null, sourceType: 'missing' };
   }
 
-  // Handle raw base64 data strings
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === 'indexeddb') {
+    return { dataUrl: null, sourceType: 'missing' };
+  }
+
+  // 1. Data URLs
+  if (trimmed.startsWith('data:image/')) {
+    const mimeMatch = trimmed.match(/^data:(image\/[a-zA-Z0-9\+\-\.]+);base64,/);
+    if (mimeMatch) {
+      const contentType = mimeMatch[1];
+      const base64Data = trimmed.slice(mimeMatch[0].length);
+      const byteSize = Math.floor((base64Data.length * 3) / 4);
+      return {
+        dataUrl: trimmed,
+        sourceType: 'data-url',
+        contentType,
+        byteSize,
+      };
+    }
+    return {
+      dataUrl: trimmed,
+      sourceType: 'data-url',
+    };
+  }
+
+  // 2. Remote URLs (HTTPS / HTTP)
+  if (trimmed.startsWith('https://') || trimmed.startsWith('http://')) {
+    const response = await fetch(trimmed);
+    if (!response.ok) {
+      throw new Error(`Unable to fetch reference image (${response.status})`);
+    }
+
+    const rawContentType = response.headers.get('content-type') || '';
+    const contentType = rawContentType.split(';')[0].trim().toLowerCase();
+
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(contentType)) {
+      throw new Error(`Unsupported remote image content-type: ${contentType || 'unknown'}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const base64 = buffer.toString('base64');
+    const dataUrl = `data:${contentType};base64,${base64}`;
+
+    return {
+      dataUrl,
+      sourceType: 'remote-url',
+      contentType,
+      byteSize: buffer.length,
+    };
+  }
+
+  // 3. Raw Base64 data strings without data URL header
   if (trimmed.startsWith('/9j/')) {
-    return `data:image/jpeg;base64,${trimmed}`;
+    const dataUrl = `data:image/jpeg;base64,${trimmed}`;
+    return {
+      dataUrl,
+      sourceType: 'raw-base64',
+      contentType: 'image/jpeg',
+      byteSize: Math.floor((trimmed.length * 3) / 4),
+    };
   }
   if (trimmed.startsWith('iVBORw0KGgo')) {
-    return `data:image/png;base64,${trimmed}`;
+    const dataUrl = `data:image/png;base64,${trimmed}`;
+    return {
+      dataUrl,
+      sourceType: 'raw-base64',
+      contentType: 'image/png',
+      byteSize: Math.floor((trimmed.length * 3) / 4),
+    };
   }
   if (trimmed.startsWith('UklGR')) {
-    return `data:image/webp;base64,${trimmed}`;
+    const dataUrl = `data:image/webp;base64,${trimmed}`;
+    return {
+      dataUrl,
+      sourceType: 'raw-base64',
+      contentType: 'image/webp',
+      byteSize: Math.floor((trimmed.length * 3) / 4),
+    };
   }
 
-  // Default raw base64 fallback
-  return `data:image/jpeg;base64,${trimmed}`;
+  // Any other unhandled string or marker
+  return { dataUrl: null, sourceType: 'missing' };
 }
 
 const COLOR_RECIPE_JSON_SCHEMA = `{
@@ -422,7 +494,35 @@ app.post(['/api/analyze-color-preset', '/analyze-color-preset'], async (req, res
       req.body.imageDataUrl ??
       req.body.imageUrl;
 
-    const normalizedImageUrl = normalizeImageDataUrl(rawImage);
+    const hasExplicitImage = rawImage !== undefined && rawImage !== null && typeof rawImage === 'string' && rawImage.trim().length > 0;
+    const isApprovedReferenceMode = req.body.sourceInfo?.type === 'approved_reference';
+
+    let resolvedImageResult;
+    try {
+      resolvedImageResult = await resolveImageForVision(rawImage);
+    } catch (imgErr: any) {
+      console.warn('[ColorPreset] Failed to resolve reference image:', imgErr?.message || imgErr);
+      return res.status(400).json({
+        error: sanitizeError(imgErr?.message || 'Unable to load the selected reference image for color analysis.'),
+      });
+    }
+
+    const { dataUrl: normalizedImageUrl, sourceType, contentType, byteSize } = resolvedImageResult;
+
+    // Safe diagnostic logging (NEVER logs base64 data, keys, or sensitive query parameters)
+    if (sourceType !== 'missing') {
+      console.log(`[ColorPreset] Resolved image for vision: source=${sourceType}, type=${contentType || 'unknown'}, size=${byteSize ? `${Math.round(byteSize / 1024)}KB` : 'unknown'}`);
+    } else {
+      console.log(`[ColorPreset] No image provided. Mode: ${isApprovedReferenceMode ? 'approved_reference (MISSING)' : 'event_narrative'}`);
+    }
+
+    // Do NOT silently fall back to event narrative if the caller intended to analyze an approved reference image
+    if ((hasExplicitImage || isApprovedReferenceMode) && !normalizedImageUrl) {
+      return res.status(400).json({
+        error: 'Unable to load the selected reference image for color analysis.',
+      });
+    }
+
     const { event, colorStyle, sourceInfo } = req.body;
 
     const client = getOpenAIClient();

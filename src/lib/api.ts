@@ -214,7 +214,6 @@ export async function analyzeColorPreset(params: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       image: imageDataUrl,
-      imageBase64: imageDataUrl,
       event: {
         name: params.event.name,
         type: params.event.type === 'Custom' ? params.event.customType : params.event.type,
