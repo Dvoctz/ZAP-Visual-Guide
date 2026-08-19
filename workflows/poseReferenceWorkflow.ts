@@ -71,19 +71,24 @@ High-end editorial photograph shot on 35mm/85mm prime lens with natural depth of
 }
 
 function imageDataUrlFromBase64(base64: string): string {
-  if (base64.startsWith('/9j/')) {
-    return `data:image/jpeg;base64,${base64}`;
+  const cleaned = (base64 || '').replace(/[\s\r\n\t]/g, '');
+  if (cleaned.startsWith('/9j')) {
+    return `data:image/jpeg;base64,${cleaned}`;
   }
 
-  if (base64.startsWith('iVBORw0KGgo')) {
-    return `data:image/png;base64,${base64}`;
+  if (cleaned.startsWith('iVBOR')) {
+    return `data:image/png;base64,${cleaned}`;
   }
 
-  if (base64.startsWith('UklGR')) {
-    return `data:image/webp;base64,${base64}`;
+  if (cleaned.startsWith('UklGR')) {
+    return `data:image/webp;base64,${cleaned}`;
   }
 
-  throw new Error('Unsupported generated image format.');
+  if (cleaned.startsWith('data:image/')) {
+    return cleaned;
+  }
+
+  return `data:image/jpeg;base64,${cleaned}`;
 }
 
 async function callOpenAIImageStep(data: { prompt: string }) {

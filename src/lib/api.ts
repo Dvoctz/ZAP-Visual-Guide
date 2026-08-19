@@ -217,7 +217,7 @@ export async function generateShootGuide(event: ShootEvent): Promise<{
   };
 }
 
-async function compressImage(dataUrl: string, maxSize = 1024): Promise<string> {
+async function prepareAnalysisImage(dataUrl: string, maxSize = 1024): Promise<string> {
   if (!dataUrl.startsWith('data:image/')) return dataUrl;
   
   return new Promise((resolve) => {
@@ -227,7 +227,17 @@ async function compressImage(dataUrl: string, maxSize = 1024): Promise<string> {
       let height = img.height;
       
       if (width <= maxSize && height <= maxSize) {
-        resolve(dataUrl);
+        // Still convert to standard jpeg to normalize format and reduce byte size
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
         return;
       }
       
@@ -253,11 +263,19 @@ async function compressImage(dataUrl: string, maxSize = 1024): Promise<string> {
       }
       
       ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL('image/jpeg', 0.8));
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
     };
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
   });
+}
+
+function detectMimeFromBase64(base64: string): string {
+  const cleaned = base64.replace(/[\s\r\n\t]/g, '');
+  if (cleaned.startsWith('/9j')) return 'image/jpeg';
+  if (cleaned.startsWith('iVBOR')) return 'image/png';
+  if (cleaned.startsWith('UklGR')) return 'image/webp';
+  return 'unknown';
 }
 
 export async function analyzeColorPreset(params: {
@@ -270,45 +288,79 @@ export async function analyzeColorPreset(params: {
     imageUrl?: string;
   };
 }): Promise<{ success: boolean; recipe: any }> {
-  let imageDataUrl = params.image || undefined;
-  
-  if (imageDataUrl && imageDataUrl.startsWith('data:image/')) {
-    imageDataUrl = await compressImage(imageDataUrl, 1024);
+  let analysisImage: string | undefined = undefined;
+
+  if (params.image && params.image !== 'indexeddb') {
+    const rawImage = params.image;
+    let declaredMime = 'none';
+    let base64Part = rawImage;
+
+    if (rawImage.startsWith('data:')) {
+      const semiIdx = rawImage.indexOf(';base64,');
+      if (semiIdx !== -1) {
+        declaredMime = rawImage.slice(5, semiIdx);
+        base64Part = rawImage.slice(semiIdx + 8);
+      }
+    }
+
+    const detectedMime = detectMimeFromBase64(base64Part);
+    console.log('[ColorPreset] source type:', params.sourceInfo?.type || (rawImage ? 'reference' : 'event'));
+    console.log('[ColorPreset] declared MIME type:', declaredMime);
+    console.log('[ColorPreset] detected MIME type:', detectedMime);
+    console.log('[ColorPreset] data URL valid:', rawImage.startsWith('data:image/'));
+    console.log('[ColorPreset] Base64 payload length:', base64Part.length);
+    console.log('[ColorPreset] approximate image byte size:', Math.round((base64Part.length * 3) / 4), 'bytes');
+
+    // Generate an in-memory compressed/scaled version for vision analysis ONLY without modifying original
+    analysisImage = await prepareAnalysisImage(rawImage, 1024);
+    const analysisBase64 = analysisImage.startsWith('data:') 
+      ? analysisImage.slice(analysisImage.indexOf(',') + 1) 
+      : analysisImage;
+    console.log('[ColorPreset] Analysis version Base64 length:', analysisBase64.length);
+    console.log('[ColorPreset] Analysis version byte size:', Math.round((analysisBase64.length * 3) / 4), 'bytes');
   }
+
+  // Construct minimal, single-image payload
+  const requestPayload = {
+    image: analysisImage,
+    event: {
+      name: params.event?.name,
+      type: params.event?.type === 'Custom' ? params.event?.customType : params.event?.type,
+      location: params.event?.location,
+      style: params.event?.style,
+      timeOfDay: params.event?.timeOfDay,
+      description: params.event?.description,
+      outfitContext: params.event?.outfitContext,
+    },
+    colorStyle: params.colorStyle || params.event?.colorStyle,
+    sourceInfo: params.sourceInfo
+      ? {
+          type: params.sourceInfo.type,
+          title: params.sourceInfo.title,
+        }
+      : undefined,
+  };
+
+  const payloadString = JSON.stringify(requestPayload);
+  console.log('[ColorPreset] request JSON byte size:', new Blob([payloadString]).size, 'bytes');
 
   const response = await fetch('/api/analyze-color-preset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      image: imageDataUrl,
-      imageBase64: imageDataUrl,
-      event: {
-        name: params.event.name,
-        type: params.event.type === 'Custom' ? params.event.customType : params.event.type,
-        location: params.event.location,
-        style: params.event.style,
-        timeOfDay: params.event.timeOfDay,
-        description: params.event.description,
-        outfitContext: params.event.outfitContext,
-      },
-      colorStyle: params.colorStyle || params.event.colorStyle,
-      sourceInfo: params.sourceInfo,
-    }),
+    body: payloadString,
   });
 
   if (!response.ok) {
     let errorMsg = 'Failed to analyze color preset';
     try {
       const text = await response.text();
-      console.error('[ColorPreset Trace] HTTP Status:', response.status);
-      console.error('[ColorPreset Trace] Raw response:', text.substring(0, 500));
       try {
         const errData = JSON.parse(text);
         if (errData?.error) {
           errorMsg = errData.error;
         }
-      } catch (e) {
-        errorMsg = `Server error (${response.status}): ` + text.substring(0, 100);
+      } catch {
+        errorMsg = `Server error (${response.status}): ` + text.substring(0, 150);
       }
     } catch {
       // fallback

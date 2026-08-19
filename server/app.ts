@@ -352,9 +352,6 @@ function normalizeImageDataUrl(raw: unknown): string | null {
     return trimmed;
   }
 
-  // If it's a data URL, we trust it and let OpenAI handle any MIME mismatch,
-  // except we will gracefully fallback to detecting the signature if OpenAI complains.
-  // Actually, we must fix the MIME type if the AI generator gave us a wrong one.
   let isDataUrl = false;
   let originalMime = '';
   let base64Payload = trimmed;
@@ -374,7 +371,7 @@ function normalizeImageDataUrl(raw: unknown): string | null {
     }
   }
 
-  // Strip whitespaces securely
+  // Strip whitespaces and newlines securely
   base64Payload = base64Payload.replace(/[\s\r\n\t]/g, '');
 
   if (base64Payload.startsWith('/9j')) {
@@ -387,10 +384,10 @@ function normalizeImageDataUrl(raw: unknown): string | null {
     return `data:image/webp;base64,${base64Payload}`;
   }
 
-  // If it is a data URL but we couldn't detect the magic bytes,
-  // just return it as is and let OpenAI validate it.
+  // If it was already a data URL but the signature is uncommon (e.g. svg, gif, etc),
+  // preserve it cleanly
   if (isDataUrl) {
-    return trimmed; 
+    return originalMime ? `data:${originalMime};base64,${base64Payload}` : `data:image/jpeg;base64,${base64Payload}`;
   }
 
   return null;
@@ -468,6 +465,10 @@ app.post(['/api/analyze-color-preset', '/analyze-color-preset'], async (req, res
     }
 
     const { event, colorStyle, sourceInfo } = req.body;
+
+    if (sourceInfo?.type === 'approved_reference' && !normalizedImageUrl) {
+      return res.status(400).json({ error: 'A valid visual reference image is required for reference-based color preset analysis.' });
+    }
 
     const client = getOpenAIClient();
 
@@ -561,14 +562,23 @@ ${COLOR_RECIPE_JSON_SCHEMA}`;
       return res.status(500).json({ error: 'Invalid ColorRecipe returned by OpenAI' });
     }
 
-    // Attach metadata and sourceInfo
-    parsedRecipe.sourceInfo = sourceInfo || (normalizedImageUrl ? {
-      type: 'approved_reference',
-      title: event?.name ? `${event.name} Reference` : 'Visual Reference',
-    } : {
-      type: 'event_style',
-      title: event?.name ? `${event.name} Aesthetic` : 'Event Aesthetic',
-    });
+    // Attach metadata and sanitized sourceInfo (without any large binary image echo)
+    const sanitizedSourceInfo = sourceInfo
+      ? {
+          type: sourceInfo.type,
+          title: sourceInfo.title,
+        }
+      : (normalizedImageUrl
+          ? {
+              type: 'approved_reference',
+              title: event?.name ? `${event.name} Reference` : 'Visual Reference',
+            }
+          : {
+              type: 'event_style',
+              title: event?.name ? `${event.name} Aesthetic` : 'Event Aesthetic',
+            });
+
+    parsedRecipe.sourceInfo = sanitizedSourceInfo;
     parsedRecipe.generatedAt = new Date().toISOString();
 
     return res.json({

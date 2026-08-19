@@ -204,7 +204,6 @@ export function ColorStyleView({ event, onBack, onNavigate, onUpdate }: ColorSty
           sourceInfo: {
             type: 'approved_reference',
             title: `Pose ${activeRef.order} • ${activeRef.title}`,
-            imageUrl: activeRef.imageUrl,
           },
         });
 
