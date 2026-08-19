@@ -22,6 +22,7 @@ import { ShootEvent, Pose, ColorRecipe, ColorStyle } from '../types';
 import { CreativeEngine } from '../lib/creativeEngine';
 import { analyzeColorPreset } from '../lib/api';
 import { backupColorRecipe } from '../lib/cloudBackup';
+import { getImageFromDB } from '../lib/imageStorage';
 import {
   validateColorRecipe,
   generateLightroomXmp,
@@ -30,6 +31,85 @@ import {
   downloadXmpPreset,
   createControlledWbTestPreset,
 } from '../lib/lightroomXmp';
+
+/**
+ * Resolves and hydrates an actual image data URL for a given reference.
+ * Inspects the input URL, and if it is not already a valid data:image/ or http(s) URL,
+ * attempts to retrieve the full-resolution data URL from IndexedDB.
+ */
+async function resolveHydratedReferenceImageUrl(
+  eventId: string,
+  poseId: string,
+  rawUrl?: string,
+  activeReferenceType?: string
+): Promise<{ dataUrl: string | null; source: 'data-url' | 'indexeddb' | 'remote' | 'missing' }> {
+  const trimmed = rawUrl?.trim();
+
+  // 1. Direct Data URL
+  if (trimmed && trimmed.startsWith('data:image/')) {
+    return { dataUrl: trimmed, source: 'data-url' };
+  }
+
+  // 2. Direct HTTPS / HTTP URL
+  if (trimmed && (trimmed.startsWith('https://') || trimmed.startsWith('http://'))) {
+    // Check if high-resolution data URL is also available in local IndexedDB
+    try {
+      const activeStored = await getImageFromDB(`${eventId}_${poseId}_active`);
+      if (activeStored && activeStored.startsWith('data:image/')) {
+        return { dataUrl: activeStored, source: 'indexeddb' };
+      }
+      if (activeReferenceType === 'upload') {
+        const uploadStored = await getImageFromDB(`${eventId}_${poseId}_upload`);
+        if (uploadStored && uploadStored.startsWith('data:image/')) {
+          return { dataUrl: uploadStored, source: 'indexeddb' };
+        }
+      }
+      const aiStored = await getImageFromDB(`${eventId}_${poseId}_ai`);
+      if (aiStored && aiStored.startsWith('data:image/')) {
+        return { dataUrl: aiStored, source: 'indexeddb' };
+      }
+    } catch {
+      // Fallback to remote URL
+    }
+    return { dataUrl: trimmed, source: 'remote' };
+  }
+
+  // 3. Unhydrated, 'indexeddb', or relative storage path -> Fetch from IndexedDB
+  try {
+    if (activeReferenceType === 'upload') {
+      const uploadStored = await getImageFromDB(`${eventId}_${poseId}_upload`);
+      if (uploadStored && uploadStored.startsWith('data:image/')) {
+        return { dataUrl: uploadStored, source: 'indexeddb' };
+      }
+    }
+
+    if (activeReferenceType === 'ai') {
+      const aiStored = await getImageFromDB(`${eventId}_${poseId}_ai`);
+      if (aiStored && aiStored.startsWith('data:image/')) {
+        return { dataUrl: aiStored, source: 'indexeddb' };
+      }
+    }
+
+    const activeStored = await getImageFromDB(`${eventId}_${poseId}_active`);
+    if (activeStored && activeStored.startsWith('data:image/')) {
+      return { dataUrl: activeStored, source: 'indexeddb' };
+    }
+
+    const aiStored = await getImageFromDB(`${eventId}_${poseId}_ai`);
+    if (aiStored && aiStored.startsWith('data:image/')) {
+      return { dataUrl: aiStored, source: 'indexeddb' };
+    }
+
+    const uploadStored = await getImageFromDB(`${eventId}_${poseId}_upload`);
+    if (uploadStored && uploadStored.startsWith('data:image/')) {
+      return { dataUrl: uploadStored, source: 'indexeddb' };
+    }
+  } catch (err) {
+    console.warn('[ColorStyle] Failed to retrieve reference image from IndexedDB:', err);
+  }
+
+  return { dataUrl: null, source: 'missing' };
+}
 
 interface ColorStyleViewProps {
   event: ShootEvent;
@@ -60,7 +140,7 @@ export function ColorStyleView({ event, onBack, onNavigate, onUpdate }: ColorSty
           (p.activeReferenceType === 'upload' && p.uploadedReference?.url) ||
           p.aiReference?.url ||
           (typeof p.referenceImage === 'string' ? p.referenceImage : p.referenceImage?.url);
-        return p.referenceApproved && !!url && url !== 'indexeddb';
+        return p.referenceApproved && !!url;
       })
       .map((p) => {
         const url = ((p.activeReferenceType === 'upload' && p.uploadedReference?.url) ||
@@ -75,6 +155,52 @@ export function ColorStyleView({ event, onBack, onNavigate, onUpdate }: ColorSty
         };
       });
   }, [event.poses]);
+
+  // Proactively hydrate approved reference thumbnails from local IndexedDB
+  useEffect(() => {
+    let isMounted = true;
+    async function hydratePoseReferences() {
+      if (!event.poses || event.poses.length === 0) return;
+      let hasUpdates = false;
+
+      const hydratedPoses = await Promise.all(
+        event.poses.map(async (p) => {
+          const rawUrl =
+            (p.activeReferenceType === 'upload' && p.uploadedReference?.url) ||
+            p.aiReference?.url ||
+            (typeof p.referenceImage === 'string' ? p.referenceImage : p.referenceImage?.url);
+
+          if (p.referenceApproved && (!rawUrl || rawUrl === 'indexeddb' || (!rawUrl.startsWith('data:') && !rawUrl.startsWith('http')))) {
+            const { dataUrl } = await resolveHydratedReferenceImageUrl(
+              event.id,
+              p.id,
+              rawUrl,
+              p.activeReferenceType
+            );
+            if (dataUrl && dataUrl !== rawUrl) {
+              hasUpdates = true;
+              return {
+                ...p,
+                referenceImage: dataUrl,
+                aiReference: p.aiReference ? { ...p.aiReference, url: dataUrl } : p.aiReference,
+                uploadedReference: p.uploadedReference ? { ...p.uploadedReference, url: dataUrl } : p.uploadedReference,
+              };
+            }
+          }
+          return p;
+        })
+      );
+
+      if (isMounted && hasUpdates) {
+        onUpdate({ poses: hydratedPoses });
+      }
+    }
+
+    hydratePoseReferences();
+    return () => {
+      isMounted = false;
+    };
+  }, [event.id, event.poses]);
 
   // Active color source mode: 'approved_reference' | 'event'
   const [colorSource, setColorSource] = useState<'approved_reference' | 'event'>(() => {
@@ -192,20 +318,42 @@ export function ColorStyleView({ event, onBack, onNavigate, onUpdate }: ColorSty
 
     try {
       if (colorSource === 'approved_reference') {
-        if (!activeRef || !activeRef.imageUrl) {
+        if (!activeRef) {
           throw new Error('NO APPROVED REFERENCE: Please select an approved visual reference to analyze.');
+        }
+
+        // 1. Asynchronously resolve and hydrate the image data URL
+        const targetPose = event.poses?.find((p) => p.id === activeRef.poseId);
+        const { dataUrl: hydratedImageUrl, source: refSource } = await resolveHydratedReferenceImageUrl(
+          event.id,
+          activeRef.poseId,
+          activeRef.imageUrl,
+          targetPose?.activeReferenceType
+        );
+
+        const isHydrated = !!hydratedImageUrl && hydratedImageUrl.startsWith('data:image/');
+        const isAvailable = !!hydratedImageUrl && (hydratedImageUrl.startsWith('data:image/') || hydratedImageUrl.startsWith('http'));
+
+        // Safe temporary diagnostic logging (NEVER logs base64)
+        console.log(`[ColorStyle] reference source: ${refSource}`);
+        console.log(`[ColorStyle] hydrated: ${isHydrated}`);
+        console.log(`[ColorStyle] image available: ${isAvailable}`);
+
+        // 2. Validate that we have a real data URL or valid remote image URL
+        if (!hydratedImageUrl || (!hydratedImageUrl.startsWith('data:image/') && !hydratedImageUrl.startsWith('http'))) {
+          throw new Error('Reference image is still loading. Please wait a moment and try again.');
         }
 
         console.log('[ColorPreset] Analyzing approved reference:', activeRef.title);
 
         const response = await analyzeColorPreset({
           event,
-          image: activeRef.imageUrl,
+          image: hydratedImageUrl,
           colorStyle: event.colorStyle,
           sourceInfo: {
             type: 'approved_reference',
             title: `Pose ${activeRef.order} • ${activeRef.title}`,
-            imageUrl: activeRef.imageUrl,
+            imageUrl: hydratedImageUrl,
           },
         });
 
