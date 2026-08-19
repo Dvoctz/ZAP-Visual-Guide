@@ -136,6 +136,8 @@ export async function generateOpenAIPoseReference(
 }
 
 export async function generateShootGuide(event: ShootEvent): Promise<{
+  success?: boolean;
+  data?: any;
   title?: string;
   overallConcept?: string;
   poses: Pose[];
@@ -151,6 +153,7 @@ export async function generateShootGuide(event: ShootEvent): Promise<{
       style: event.style,
       timeOfDay: event.timeOfDay,
       description: event.description,
+      outfitContext: event.outfitContext,
     }),
   });
 
@@ -168,22 +171,50 @@ export async function generateShootGuide(event: ShootEvent): Promise<{
   }
 
   const data = await response.json();
+  const payload = data.data || data;
 
-  // Ensure robust formatting of poses
-  const rawPoses = Array.isArray(data.poses) ? data.poses : [];
-  data.poses = rawPoses.map((p: any, index: number) => ({
+  const rawPoses =
+    Array.isArray(payload.poses)
+      ? payload.poses
+      : Array.isArray(data.poses)
+        ? data.poses
+        : [];
+
+  if (rawPoses.length === 0) {
+    throw new Error(
+      'OpenAI returned an empty or malformed posing sequence. Please retry.'
+    );
+  }
+
+  const formattedPoses: Pose[] = rawPoses.map((p: any, index: number) => ({
     id: p.id || `pose-${String(index + 1).padStart(2, '0')}`,
     order: typeof p.order === 'number' ? p.order : index + 1,
     title: p.title || `Pose ${index + 1}`,
     category: p.category || 'Interaction',
     shootingIntent: p.shootingIntent || '',
-    clientDirection: p.clientDirection || 'Look at each other naturally and take a slow breath.',
-    photographerConcept: p.photographerConcept || 'Capture natural interaction with flattering depth.',
+    clientDirection:
+      p.clientDirection ||
+      'Look at each other naturally and take a slow breath.',
+    photographerConcept:
+      p.photographerConcept ||
+      'Capture natural interaction with flattering depth.',
     mood: p.mood || event.style || 'Cinematic',
     completed: false,
   }));
 
-  return data;
+  return {
+    success: true,
+    data: payload,
+    overallConcept:
+      payload.overallConcept ||
+      data.overallConcept ||
+      '',
+    poses: formattedPoses,
+    colorStyle:
+      payload.colorStyle ||
+      data.colorStyle ||
+      {},
+  };
 }
 
 export async function analyzeColorPreset(params: {

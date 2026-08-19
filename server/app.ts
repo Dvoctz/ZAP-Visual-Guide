@@ -234,21 +234,109 @@ Generate a cohesive, complete shoot creative guide with 8-12 diverse, well-descr
 // Legacy Generate Guide Endpoint
 app.post(['/api/generate-guide', '/generate-guide'], async (req, res) => {
   try {
-    const { brief, vibe, category } = req.body;
+    const {
+      eventName,
+      eventType,
+      location,
+      style,
+      timeOfDay,
+      description,
+      outfitContext,
+      brief,
+      vibe,
+      category,
+    } = req.body;
+
+    const resolvedEventName = eventName || brief || '';
+    const resolvedEventType = eventType || category || '';
+    const resolvedStyle = style || vibe || '';
+    const resolvedLocation = location || '';
+    const resolvedTimeOfDay = timeOfDay || '';
+    const resolvedDescription = description || '';
+
     const client = getOpenAIClient();
+
+    const systemPrompt = `You are an elite creative director and professional wedding/event photographer.
+Generate a comprehensive, practical 8-12 pose shoot guide and color recipe for the photo shoot as valid JSON.
+The JSON must strictly have the following top-level structure:
+{
+  "overallConcept": "Detailed overall concept, lighting, and mood description for the shoot",
+  "poses": [
+    {
+      "id": "pose-01",
+      "order": 1,
+      "title": "Pose Title",
+      "category": "e.g. Interaction, Movement, Environmental, Intimate, Editorial",
+      "shootingIntent": "Clear technical and compositional intent for the photographer",
+      "clientDirection": "Exact verbal coaching prompts to give to the client",
+      "photographerConcept": "Framing, lens choice, depth of field, and lighting guidance",
+      "mood": "Specific emotional tone"
+    }
+  ],
+  "colorStyle": {
+    "name": "Preset / Color Grade Name",
+    "overallLook": "Detailed visual description of color palette and aesthetic",
+    "skinTone": "Skin tone treatment and preservation guidance",
+    "highlights": "Highlight tones and roll-off",
+    "shadows": "Shadow depth, tint, and lift",
+    "whites": "White point character",
+    "blacks": "Black level and fade",
+    "contrast": "Contrast curve behavior",
+    "temperature": "White balance / color temperature direction",
+    "saturation": "Overall and selective saturation balance",
+    "colorDirection": "Color shifts and split toning notes",
+    "filmCharacter": "Grain, texture, or film simulation qualities",
+    "editingNotes": "Practical Lightroom / camera raw adjustment guidance"
+  }
+}
+Generate between 8 and 12 distinct, practical poses suitable for professional wedding and portrait photographers. Return JSON only.`;
+
+    const userPrompt = `Event:
+${resolvedEventName}
+
+Event Type:
+${resolvedEventType}
+
+Location:
+${resolvedLocation}
+
+Style:
+${resolvedStyle}
+
+Time of Day:
+${resolvedTimeOfDay}
+
+Description:
+${resolvedDescription}
+
+Outfit Context:
+${JSON.stringify(outfitContext || {})}
+
+Create an 8-12 pose professional photo shoot guide and color style based on these inputs.`;
 
     const response = await client.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: 'You are an elite creative director. Generate a detailed photo shoot concept and pose list as JSON.' },
-        { role: 'user', content: `Brief: ${brief}\nVibe: ${vibe}\nCategory: ${category}` },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
       ],
       response_format: { type: 'json_object' },
       temperature: 0.7,
     });
 
     const parsed = JSON.parse(response.choices[0]?.message?.content || '{}');
-    res.json({ success: true, data: parsed });
+
+    if (!parsed || !Array.isArray(parsed.poses) || parsed.poses.length === 0) {
+      throw new Error('OpenAI returned an empty or malformed posing sequence. Please retry.');
+    }
+
+    res.json({
+      success: true,
+      overallConcept: parsed.overallConcept || '',
+      poses: parsed.poses,
+      colorStyle: parsed.colorStyle || {},
+      data: parsed,
+    });
   } catch (error: any) {
     console.error('Generate Guide Error:', error);
     res.status(500).json({ error: sanitizeError(error?.message || 'Failed to generate guide.') });
