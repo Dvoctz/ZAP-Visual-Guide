@@ -1806,23 +1806,14 @@ function PosingGuideView({
                 {/* Left Column: Reference Image Container */}
                 <div className="w-full md:w-5/12 lg:w-4/12 shrink-0 flex flex-col gap-3">
                   <div className="relative w-full aspect-[3/4] bg-[#111] border border-[#2A2A2A] rounded-xl overflow-hidden flex flex-col items-center justify-center group shadow-inner">
-                    {isPoseGenerating ? (
-                      <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-[#111]/90">
-                        <Sparkles size={32} className="text-[#D4AF37] mb-3 animate-spin" />
-                        <span className="text-[11px] font-bold uppercase tracking-widest text-white mb-1">
-                          CREATING VISUAL REFERENCE...
-                        </span>
-                        <p className="text-[10px] text-[#A1A1AA] font-light max-w-[180px]">
-                          Nano Banana 2 is visualizing the pose & environment
-                        </p>
-                      </div>
-                    ) : activeImage && activeImage !== 'indexeddb' ? (
+                    {activeImage && activeImage !== 'indexeddb' ? (
                       <>
                         <img
                           src={activeImage}
                           alt={pose.title}
                           className="w-full h-full object-cover cursor-pointer transition-transform duration-300 group-hover:scale-[1.02]"
                           onClick={() =>
+                            !isPoseGenerating &&
                             setLightboxImage({
                               url: activeImage,
                               title: pose.title,
@@ -1832,9 +1823,22 @@ function PosingGuideView({
                           }
                           referrerPolicy="no-referrer"
                         />
+
+                        {/* If generating a new reference, show translucent progress veil over existing image */}
+                        {isPoseGenerating && (
+                          <div className="absolute inset-0 bg-black/75 backdrop-blur-[2px] flex flex-col items-center justify-center p-4 text-center z-10">
+                            <Sparkles size={28} className="text-[#D4AF37] mb-2.5 animate-spin" />
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-white mb-1">
+                              GENERATING NEW REFERENCE...
+                            </span>
+                            <p className="text-[9px] text-[#A1A1AA] font-light max-w-[170px] leading-snug">
+                              GPT Image 2 is updating this visual reference
+                            </p>
+                          </div>
+                        )}
                         
                         {/* Top Badges Overlay */}
-                        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
+                        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-20">
                           <span className="text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 bg-black/75 backdrop-blur-sm text-white/90 rounded border border-white/10">
                             {pose.activeReferenceType === 'upload' ? 'MY UPLOAD' : 'AI REFERENCE'}
                           </span>
@@ -1846,21 +1850,33 @@ function PosingGuideView({
                         </div>
 
                         {/* Lightbox Trigger on Hover */}
-                        <button
-                          onClick={() =>
-                            setLightboxImage({
-                              url: activeImage,
-                              title: pose.title,
-                              poseOrder: pose.order || index + 1,
-                              clientDirection: pose.clientDirection,
-                            })
-                          }
-                          className="absolute bottom-2.5 right-2.5 p-1.5 rounded-lg bg-black/70 hover:bg-black text-white/80 hover:text-white backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity border border-white/20"
-                          aria-label="Expand Reference Image"
-                        >
-                          <ZoomIn size={14} />
-                        </button>
+                        {!isPoseGenerating && (
+                          <button
+                            onClick={() =>
+                              setLightboxImage({
+                                url: activeImage,
+                                title: pose.title,
+                                poseOrder: pose.order || index + 1,
+                                clientDirection: pose.clientDirection,
+                              })
+                            }
+                            className="absolute bottom-2.5 right-2.5 p-1.5 rounded-lg bg-black/70 hover:bg-black text-white/80 hover:text-white backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity border border-white/20 z-20"
+                            aria-label="Expand Reference Image"
+                          >
+                            <ZoomIn size={14} />
+                          </button>
+                        )}
                       </>
+                    ) : isPoseGenerating ? (
+                      <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-[#111]">
+                        <Sparkles size={32} className="text-[#D4AF37] mb-3 animate-spin" />
+                        <span className="text-[11px] font-bold uppercase tracking-widest text-white mb-1">
+                          CREATING VISUAL REFERENCE...
+                        </span>
+                        <p className="text-[10px] text-[#A1A1AA] font-light max-w-[180px]">
+                          GPT Image 2 is visualizing the pose & environment
+                        </p>
+                      </div>
                     ) : (
                       <div className="w-full h-full flex flex-col items-center justify-center p-5 text-center bg-gradient-to-b from-[#141414] to-[#0d0d0d]">
                         <div className="w-12 h-12 rounded-full bg-[#1E1E1E] border border-[#333] flex items-center justify-center text-[#D4AF37]/60 mb-3 shadow-inner">
@@ -1876,7 +1892,7 @@ function PosingGuideView({
                         {!isViewingArchived && (
                           <div className="flex flex-col gap-2 w-full max-w-[190px]">
                             <button
-                              onClick={() => setEngineModalPose(pose)}
+                              onClick={() => handleGeneratePoseReference(pose)}
                               className="w-full py-2 px-3 bg-[#D4AF37] hover:bg-white text-black text-[10px] font-bold uppercase tracking-widest rounded-lg flex items-center justify-center gap-1.5 shadow-md transition-colors"
                             >
                               <Sparkles size={13} />
@@ -1902,13 +1918,21 @@ function PosingGuideView({
                       <span className="text-[9px] uppercase tracking-widest text-red-400 font-bold block mb-0.5">
                         REFERENCE STATUS
                       </span>
-                      <p className="text-[10px] text-white/70 mb-2">{poseError}</p>
-                      <button
-                        onClick={() => setEngineModalPose(pose)}
-                        className="px-3 py-1 bg-[#D4AF37] text-black text-[9px] uppercase tracking-widest font-bold rounded"
-                      >
-                        Select Provider
-                      </button>
+                      <p className="text-[10px] text-white/70 mb-2 leading-relaxed">{poseError}</p>
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => handleGeneratePoseReference(pose)}
+                          className="px-3 py-1 bg-[#D4AF37] hover:bg-white text-black text-[9px] uppercase tracking-widest font-bold rounded transition-colors"
+                        >
+                          Retry
+                        </button>
+                        <button
+                          onClick={() => setEngineModalPose(pose)}
+                          className="px-3 py-1 bg-[#222] hover:bg-[#333] text-[#A1A1AA] hover:text-white text-[9px] uppercase tracking-widest font-bold rounded border border-[#333] transition-colors"
+                        >
+                          Options
+                        </button>
+                      </div>
                     </div>
                   )}
 

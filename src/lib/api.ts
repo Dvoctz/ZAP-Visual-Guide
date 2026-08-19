@@ -99,8 +99,8 @@ export async function generateOpenAIPoseReference(
     throw new Error('Failed to obtain workflow job ID for reference generation.');
   }
 
-  // Poll status endpoint every 3 seconds (up to 30 attempts = 90s)
-  const maxAttempts = 30;
+  // Poll status endpoint every 3 seconds (up to 60 attempts = 180s)
+  const maxAttempts = 60;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
@@ -109,7 +109,8 @@ export async function generateOpenAIPoseReference(
 
     const statusData = await statusRes.json();
     if (statusData.status === 'completed') {
-      if (!statusData.image) {
+      const imgUrl = statusData.image || statusData.result?.imageUrl;
+      if (!imgUrl) {
         throw new Error('Workflow completed but did not return an image URL.');
       }
       return {
@@ -117,8 +118,8 @@ export async function generateOpenAIPoseReference(
         referenceImage: {
           type: 'ai',
           provider: 'openai',
-          model: statusData.metadata?.model || 'gpt-image-2',
-          url: statusData.image,
+          model: statusData.metadata?.model || statusData.result?.model || 'gpt-image-2',
+          url: imgUrl,
           generatedAt: new Date().toISOString(),
           promptUsed: prompt || pose.title,
           environmentId: environment?.id,

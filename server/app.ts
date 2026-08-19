@@ -123,6 +123,11 @@ app.get(['/api/pose-reference-status/:jobId', '/pose-reference-status/:jobId'], 
       jobId: run.runId,
       status,
       result,
+      image: (result as any)?.imageUrl || null,
+      metadata: {
+        model: (result as any)?.model || 'gpt-image-2',
+        size: (result as any)?.size || '1024x1024',
+      },
       error,
     });
   } catch (err: any) {
