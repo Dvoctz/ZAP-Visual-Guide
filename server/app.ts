@@ -346,36 +346,48 @@ Create an 8-12 pose professional photo shoot guide and color style based on thes
 function normalizeImageDataUrl(raw: unknown): string | null {
   if (!raw || typeof raw !== 'string') return null;
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed || trimmed === 'indexeddb') return null;
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }
 
+  let isDataUrl = false;
+  let originalMime = '';
   let base64Payload = trimmed;
+
   if (trimmed.startsWith('data:')) {
+    isDataUrl = true;
     const base64Index = trimmed.indexOf(';base64,');
     if (base64Index !== -1) {
-      base64Payload = trimmed.slice(base64Index + 8).trim();
+      originalMime = trimmed.slice(5, base64Index);
+      base64Payload = trimmed.slice(base64Index + 8);
     } else {
       const commaIndex = trimmed.indexOf(',');
       if (commaIndex !== -1) {
-        base64Payload = trimmed.slice(commaIndex + 1).trim();
+        originalMime = trimmed.slice(5, commaIndex);
+        base64Payload = trimmed.slice(commaIndex + 1);
       }
     }
   }
 
-  if (base64Payload.startsWith('/9j/')) {
+  base64Payload = base64Payload.replace(/[\s\r\n\t]/g, '');
+
+  if (base64Payload.startsWith('/9j')) {
     return `data:image/jpeg;base64,${base64Payload}`;
   }
-  if (base64Payload.startsWith('iVBORw0KGgo')) {
+  if (base64Payload.startsWith('iVBOR')) {
     return `data:image/png;base64,${base64Payload}`;
   }
   if (base64Payload.startsWith('UklGR')) {
     return `data:image/webp;base64,${base64Payload}`;
   }
 
-  throw new Error('Unsupported or malformed image format. Supported formats: JPEG, PNG, WEBP.');
+  if (isDataUrl && originalMime) {
+    return `data:${originalMime};base64,${base64Payload}`;
+  }
+
+  return null;
 }
 
 const COLOR_RECIPE_JSON_SCHEMA = `{
@@ -442,6 +454,10 @@ app.post(['/api/analyze-color-preset', '/analyze-color-preset'], async (req, res
       req.body.imageUrl;
 
     const normalizedImageUrl = normalizeImageDataUrl(rawImage);
+    if (rawImage && rawImage !== 'indexeddb' && !normalizedImageUrl) {
+      return res.status(400).json({ error: 'The provided image is in an unsupported format or could not be recognized. Supported formats: JPEG, PNG, WEBP.' });
+    }
+
     const { event, colorStyle, sourceInfo } = req.body;
 
     const client = getOpenAIClient();
