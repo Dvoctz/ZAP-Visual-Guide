@@ -151,6 +151,7 @@ export async function generateShootGuide(event: ShootEvent): Promise<{
       style: event.style,
       timeOfDay: event.timeOfDay,
       description: event.description,
+      outfitContext: event.outfitContext,
     }),
   });
 
@@ -168,10 +169,15 @@ export async function generateShootGuide(event: ShootEvent): Promise<{
   }
 
   const data = await response.json();
+  const payload = data.data || data;
 
-  // Ensure robust formatting of poses
-  const rawPoses = Array.isArray(data.poses) ? data.poses : [];
-  data.poses = rawPoses.map((p: any, index: number) => ({
+  const rawPoses = Array.isArray(payload.poses) ? payload.poses : [];
+
+  if (rawPoses.length === 0) {
+    throw new Error('OpenAI returned an empty or malformed posing sequence. Please retry.');
+  }
+
+  const formattedPoses: Pose[] = rawPoses.map((p: any, index: number) => ({
     id: p.id || `pose-${String(index + 1).padStart(2, '0')}`,
     order: typeof p.order === 'number' ? p.order : index + 1,
     title: p.title || `Pose ${index + 1}`,
@@ -183,7 +189,12 @@ export async function generateShootGuide(event: ShootEvent): Promise<{
     completed: false,
   }));
 
-  return data;
+  return {
+    title: payload.title || event.name,
+    overallConcept: payload.overallConcept || payload.concept || '',
+    poses: formattedPoses,
+    colorStyle: payload.colorStyle || {},
+  };
 }
 
 export async function analyzeColorPreset(params: {

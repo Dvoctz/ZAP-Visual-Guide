@@ -231,24 +231,104 @@ Generate a cohesive, complete shoot creative guide with 8-12 diverse, well-descr
   }
 });
 
-// Legacy Generate Guide Endpoint
+// Generate Shoot Guide Endpoint (Accepts frontend event details & legacy parameters)
 app.post(['/api/generate-guide', '/generate-guide'], async (req, res) => {
   try {
-    const { brief, vibe, category } = req.body;
+    const {
+      eventName,
+      eventType,
+      location,
+      style,
+      timeOfDay,
+      description,
+      outfitContext,
+      brief,
+      vibe,
+      category,
+    } = req.body;
+
+    const resolvedName = eventName || brief || 'Wedding & Couple Shoot';
+    const resolvedType = eventType || category || 'Couple Shoot';
+    const resolvedLocation = location || 'Scenic Venue';
+    const resolvedStyle = style || vibe || 'Cinematic, Romantic, Editorial';
+    const resolvedTimeOfDay = timeOfDay || 'Golden Hour';
+    const resolvedDescription = description || brief || 'A bespoke visual portrait session.';
+
+    let outfitDetails = '';
+    if (outfitContext) {
+      if (outfitContext.bride) {
+        outfitDetails += `\nBride Outfit: ${outfitContext.bride.color || ''} ${outfitContext.bride.type || ''}. ${outfitContext.bride.stylingNotes || outfitContext.bride.description || ''}`;
+      }
+      if (outfitContext.groom) {
+        outfitDetails += `\nGroom Outfit: ${outfitContext.groom.color || ''} ${outfitContext.groom.type || ''}. ${outfitContext.groom.stylingNotes || outfitContext.groom.description || ''}`;
+      }
+    }
+
     const client = getOpenAIClient();
+
+    const systemPrompt = `You are an elite creative director and photography producer for luxury wedding and couple portraiture.
+Generate a cohesive, bespoke visual shoot guide with exactly 8 to 12 distinct, high-impact poses and a matching color grading direction.
+
+You must respond with ONLY a valid JSON object matching this exact schema:
+{
+  "overallConcept": "string (An inspiring, evocative 2-3 sentence concept summarizing the artistic vision, emotional tone, and location atmosphere)",
+  "poses": [
+    {
+      "id": "string (e.g. pose-01, pose-02)",
+      "order": number,
+      "title": "string (e.g. The Regal Entrance, Intimate Whispers, The Sunset Stroll)",
+      "category": "string (e.g. Interaction, Editorial, Romantic, Movement, Environmental, Detail)",
+      "shootingIntent": "string (Artistic intent, composition, framing, and depth of field)",
+      "clientDirection": "string (Clear, warm, natural words for the photographer to speak to the couple to guide their posture and emotion)",
+      "photographerConcept": "string (Technical guidance on camera angle, focal length, framing, and lighting considerations)",
+      "mood": "string (Emotional atmosphere, e.g. Elegant, Joyful, Tender, Cinematic, Grand)"
+    }
+  ],
+  "colorStyle": {
+    "name": "string (e.g. Cinematic Warm Film, Royal Golden Hour)",
+    "overallLook": "string (e.g. Rich, warm film aesthetic with soft golden highlights and clean skin tones)",
+    "skinTone": "string (e.g. Natural, radiant with soft peachy warmth and true luminosity)",
+    "highlights": "string (e.g. Softened creamy highlights retaining veil and garment texture)",
+    "shadows": "string (e.g. Lifted warm shadows with clean deep blacks)",
+    "whites": "string (e.g. Pure and clean without clipping)",
+    "blacks": "string (e.g. Subtly faded for gentle film character)",
+    "contrast": "string (e.g. Medium-soft with gentle midtone roll-off)",
+    "temperature": "string (e.g. Warm 5600K)",
+    "saturation": "string (e.g. Refined and balanced with rich earth tones)",
+    "colorDirection": "string (e.g. Warm golds, deep emerald greens, and muted jewel tones)",
+    "filmCharacter": "string (e.g. Kodak Portra 400 inspired fine grain and smooth tonal gradation)",
+    "editingNotes": "string (e.g. Prioritize skin tone accuracy while preserving rich royal outfit hues)"
+  }
+}`;
+
+    const userPrompt = `Event Name: ${resolvedName}
+Event Type: ${resolvedType}
+Location: ${resolvedLocation}
+Photography Style / Mood: ${resolvedStyle}
+Time of Day / Lighting: ${resolvedTimeOfDay}
+Mood & Vision: ${resolvedDescription}${outfitDetails}
+
+Create a full visual shoot guide with 8-12 diverse, editorial-grade poses flowing naturally through the session arc.`;
 
     const response = await client.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: 'You are an elite creative director. Generate a detailed photo shoot concept and pose list as JSON.' },
-        { role: 'user', content: `Brief: ${brief}\nVibe: ${vibe}\nCategory: ${category}` },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
       ],
       response_format: { type: 'json_object' },
       temperature: 0.7,
     });
 
     const parsed = JSON.parse(response.choices[0]?.message?.content || '{}');
-    res.json({ success: true, data: parsed });
+
+    return res.json({
+      success: true,
+      overallConcept: parsed.overallConcept || parsed.concept || '',
+      poses: parsed.poses || [],
+      colorStyle: parsed.colorStyle || {},
+      data: parsed,
+    });
   } catch (error: any) {
     console.error('Generate Guide Error:', error);
     res.status(500).json({ error: sanitizeError(error?.message || 'Failed to generate guide.') });
