@@ -3,7 +3,6 @@ import { Camera, Upload, Trash2, Check, Star, Sparkles, Image as ImageIcon, X, A
 import { ShootEvent, EnvironmentReference } from '../types';
 import { resizeImageFile } from '../lib/imageProcessor';
 import { saveImageToDB, deleteImageFromDB } from '../lib/imageStorage';
-import { backupEnvironmentImage } from '../lib/cloudBackup';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface EnvironmentSectionProps {
@@ -89,9 +88,6 @@ export function EnvironmentSection({ event, onUpdateEvent }: EnvironmentSectionP
       setPendingImageUrl(null);
       setEnvName('');
       setEnvDescription('');
-
-      // Non-blocking asynchronous cloud backup (best-effort)
-      backupEnvironmentImage(event.id, newEnv).catch(console.warn);
     } catch (err: any) {
       console.error('Failed to save environment:', err);
       setErrorMessage('Failed to save environment reference. Please try again.');

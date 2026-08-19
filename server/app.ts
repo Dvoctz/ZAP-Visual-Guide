@@ -231,204 +231,52 @@ Generate a cohesive, complete shoot creative guide with 8-12 diverse, well-descr
   }
 });
 
-// Generate Shoot Guide Endpoint (Accepts frontend event details & legacy parameters)
+// Legacy Generate Guide Endpoint
 app.post(['/api/generate-guide', '/generate-guide'], async (req, res) => {
   try {
-    const {
-      eventName,
-      eventType,
-      location,
-      style,
-      timeOfDay,
-      description,
-      outfitContext,
-      brief,
-      vibe,
-      category,
-    } = req.body;
-
-    const resolvedName = eventName || brief || 'Wedding & Couple Shoot';
-    const resolvedType = eventType || category || 'Couple Shoot';
-    const resolvedLocation = location || 'Scenic Venue';
-    const resolvedStyle = style || vibe || 'Cinematic, Romantic, Editorial';
-    const resolvedTimeOfDay = timeOfDay || 'Golden Hour';
-    const resolvedDescription = description || brief || 'A bespoke visual portrait session.';
-
-    let outfitDetails = '';
-    if (outfitContext) {
-      if (outfitContext.bride) {
-        outfitDetails += `\nBride Outfit: ${outfitContext.bride.color || ''} ${outfitContext.bride.type || ''}. ${outfitContext.bride.stylingNotes || outfitContext.bride.description || ''}`;
-      }
-      if (outfitContext.groom) {
-        outfitDetails += `\nGroom Outfit: ${outfitContext.groom.color || ''} ${outfitContext.groom.type || ''}. ${outfitContext.groom.stylingNotes || outfitContext.groom.description || ''}`;
-      }
-    }
-
+    const { brief, vibe, category } = req.body;
     const client = getOpenAIClient();
-
-    const systemPrompt = `You are an elite creative director and photography producer for luxury wedding and couple portraiture.
-Generate a cohesive, bespoke visual shoot guide with exactly 8 to 12 distinct, high-impact poses and a matching color grading direction.
-
-You must respond with ONLY a valid JSON object matching this exact schema:
-{
-  "overallConcept": "string (An inspiring, evocative 2-3 sentence concept summarizing the artistic vision, emotional tone, and location atmosphere)",
-  "poses": [
-    {
-      "id": "string (e.g. pose-01, pose-02)",
-      "order": number,
-      "title": "string (e.g. The Regal Entrance, Intimate Whispers, The Sunset Stroll)",
-      "category": "string (e.g. Interaction, Editorial, Romantic, Movement, Environmental, Detail)",
-      "shootingIntent": "string (Artistic intent, composition, framing, and depth of field)",
-      "clientDirection": "string (Clear, warm, natural words for the photographer to speak to the couple to guide their posture and emotion)",
-      "photographerConcept": "string (Technical guidance on camera angle, focal length, framing, and lighting considerations)",
-      "mood": "string (Emotional atmosphere, e.g. Elegant, Joyful, Tender, Cinematic, Grand)"
-    }
-  ],
-  "colorStyle": {
-    "name": "string (e.g. Cinematic Warm Film, Royal Golden Hour)",
-    "overallLook": "string (e.g. Rich, warm film aesthetic with soft golden highlights and clean skin tones)",
-    "skinTone": "string (e.g. Natural, radiant with soft peachy warmth and true luminosity)",
-    "highlights": "string (e.g. Softened creamy highlights retaining veil and garment texture)",
-    "shadows": "string (e.g. Lifted warm shadows with clean deep blacks)",
-    "whites": "string (e.g. Pure and clean without clipping)",
-    "blacks": "string (e.g. Subtly faded for gentle film character)",
-    "contrast": "string (e.g. Medium-soft with gentle midtone roll-off)",
-    "temperature": "string (e.g. Warm 5600K)",
-    "saturation": "string (e.g. Refined and balanced with rich earth tones)",
-    "colorDirection": "string (e.g. Warm golds, deep emerald greens, and muted jewel tones)",
-    "filmCharacter": "string (e.g. Kodak Portra 400 inspired fine grain and smooth tonal gradation)",
-    "editingNotes": "string (e.g. Prioritize skin tone accuracy while preserving rich royal outfit hues)"
-  }
-}`;
-
-    const userPrompt = `Event Name: ${resolvedName}
-Event Type: ${resolvedType}
-Location: ${resolvedLocation}
-Photography Style / Mood: ${resolvedStyle}
-Time of Day / Lighting: ${resolvedTimeOfDay}
-Mood & Vision: ${resolvedDescription}${outfitDetails}
-
-Create a full visual shoot guide with 8-12 diverse, editorial-grade poses flowing naturally through the session arc.`;
 
     const response = await client.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
+        { role: 'system', content: 'You are an elite creative director. Generate a detailed photo shoot concept and pose list as JSON.' },
+        { role: 'user', content: `Brief: ${brief}\nVibe: ${vibe}\nCategory: ${category}` },
       ],
       response_format: { type: 'json_object' },
       temperature: 0.7,
     });
 
     const parsed = JSON.parse(response.choices[0]?.message?.content || '{}');
-
-    return res.json({
-      success: true,
-      overallConcept: parsed.overallConcept || parsed.concept || '',
-      poses: parsed.poses || [],
-      colorStyle: parsed.colorStyle || {},
-      data: parsed,
-    });
+    res.json({ success: true, data: parsed });
   } catch (error: any) {
     console.error('Generate Guide Error:', error);
     res.status(500).json({ error: sanitizeError(error?.message || 'Failed to generate guide.') });
   }
 });
 
-async function resolveImageForVision(raw: unknown): Promise<{
-  dataUrl: string | null;
-  sourceType: 'data-url' | 'remote-url' | 'raw-base64' | 'missing';
-  contentType?: string;
-  byteSize?: number;
-}> {
-  if (!raw || typeof raw !== 'string') {
-    return { dataUrl: null, sourceType: 'missing' };
-  }
-
+function normalizeImageDataUrl(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'string') return null;
   const trimmed = raw.trim();
-  if (!trimmed || trimmed === 'indexeddb') {
-    return { dataUrl: null, sourceType: 'missing' };
-  }
+  if (!trimmed) return null;
 
-  // 1. Data URLs
   if (trimmed.startsWith('data:image/')) {
-    const mimeMatch = trimmed.match(/^data:(image\/[a-zA-Z0-9\+\-\.]+);base64,/);
-    if (mimeMatch) {
-      const contentType = mimeMatch[1];
-      const base64Data = trimmed.slice(mimeMatch[0].length);
-      const byteSize = Math.floor((base64Data.length * 3) / 4);
-      return {
-        dataUrl: trimmed,
-        sourceType: 'data-url',
-        contentType,
-        byteSize,
-      };
-    }
-    return {
-      dataUrl: trimmed,
-      sourceType: 'data-url',
-    };
+    return trimmed;
   }
 
-  // 2. Remote URLs (HTTPS / HTTP)
-  if (trimmed.startsWith('https://') || trimmed.startsWith('http://')) {
-    const response = await fetch(trimmed);
-    if (!response.ok) {
-      throw new Error(`Unable to fetch reference image (${response.status})`);
-    }
-
-    const rawContentType = response.headers.get('content-type') || '';
-    const contentType = rawContentType.split(';')[0].trim().toLowerCase();
-
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedTypes.includes(contentType)) {
-      throw new Error(`Unsupported remote image content-type: ${contentType || 'unknown'}`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const base64 = buffer.toString('base64');
-    const dataUrl = `data:${contentType};base64,${base64}`;
-
-    return {
-      dataUrl,
-      sourceType: 'remote-url',
-      contentType,
-      byteSize: buffer.length,
-    };
-  }
-
-  // 3. Raw Base64 data strings without data URL header
+  // Handle raw base64 data strings
   if (trimmed.startsWith('/9j/')) {
-    const dataUrl = `data:image/jpeg;base64,${trimmed}`;
-    return {
-      dataUrl,
-      sourceType: 'raw-base64',
-      contentType: 'image/jpeg',
-      byteSize: Math.floor((trimmed.length * 3) / 4),
-    };
+    return `data:image/jpeg;base64,${trimmed}`;
   }
   if (trimmed.startsWith('iVBORw0KGgo')) {
-    const dataUrl = `data:image/png;base64,${trimmed}`;
-    return {
-      dataUrl,
-      sourceType: 'raw-base64',
-      contentType: 'image/png',
-      byteSize: Math.floor((trimmed.length * 3) / 4),
-    };
+    return `data:image/png;base64,${trimmed}`;
   }
   if (trimmed.startsWith('UklGR')) {
-    const dataUrl = `data:image/webp;base64,${trimmed}`;
-    return {
-      dataUrl,
-      sourceType: 'raw-base64',
-      contentType: 'image/webp',
-      byteSize: Math.floor((trimmed.length * 3) / 4),
-    };
+    return `data:image/webp;base64,${trimmed}`;
   }
 
-  // Any other unhandled string or marker
-  return { dataUrl: null, sourceType: 'missing' };
+  // Default raw base64 fallback
+  return `data:image/jpeg;base64,${trimmed}`;
 }
 
 const COLOR_RECIPE_JSON_SCHEMA = `{
@@ -494,35 +342,7 @@ app.post(['/api/analyze-color-preset', '/analyze-color-preset'], async (req, res
       req.body.imageDataUrl ??
       req.body.imageUrl;
 
-    const hasExplicitImage = rawImage !== undefined && rawImage !== null && typeof rawImage === 'string' && rawImage.trim().length > 0;
-    const isApprovedReferenceMode = req.body.sourceInfo?.type === 'approved_reference';
-
-    let resolvedImageResult;
-    try {
-      resolvedImageResult = await resolveImageForVision(rawImage);
-    } catch (imgErr: any) {
-      console.warn('[ColorPreset] Failed to resolve reference image:', imgErr?.message || imgErr);
-      return res.status(400).json({
-        error: sanitizeError(imgErr?.message || 'Unable to load the selected reference image for color analysis.'),
-      });
-    }
-
-    const { dataUrl: normalizedImageUrl, sourceType, contentType, byteSize } = resolvedImageResult;
-
-    // Safe diagnostic logging (NEVER logs base64 data, keys, or sensitive query parameters)
-    if (sourceType !== 'missing') {
-      console.log(`[ColorPreset] Resolved image for vision: source=${sourceType}, type=${contentType || 'unknown'}, size=${byteSize ? `${Math.round(byteSize / 1024)}KB` : 'unknown'}`);
-    } else {
-      console.log(`[ColorPreset] No image provided. Mode: ${isApprovedReferenceMode ? 'approved_reference (MISSING)' : 'event_narrative'}`);
-    }
-
-    // Do NOT silently fall back to event narrative if the caller intended to analyze an approved reference image
-    if ((hasExplicitImage || isApprovedReferenceMode) && !normalizedImageUrl) {
-      return res.status(400).json({
-        error: 'Unable to load the selected reference image for color analysis.',
-      });
-    }
-
+    const normalizedImageUrl = normalizeImageDataUrl(rawImage);
     const { event, colorStyle, sourceInfo } = req.body;
 
     const client = getOpenAIClient();
