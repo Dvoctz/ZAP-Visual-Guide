@@ -5,7 +5,7 @@ export default defineNitroConfig({
   preset: "vercel",
   vercel: { entryFormat: "node" },
   routes: {
-    "/**": { handler: "./api/index.ts", format: "node" },
+    "/**": { handler: "./server/app.ts", format: "node" },
   },
   publicAssets: [
     {

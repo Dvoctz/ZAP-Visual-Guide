@@ -1,4 +1,4 @@
-import app from './api/index.js'; // Use .js extension for ESM runtime resolution
+import app from './server/app.js'; // Use .js extension for ESM runtime resolution
 import express from 'express';
 import path from 'path';
 
