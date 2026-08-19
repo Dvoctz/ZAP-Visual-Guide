@@ -9,11 +9,15 @@ import {
   Brain,
   Layers,
   Image as ImageIcon,
+  Cloud,
+  Database,
+  HardDrive,
 } from 'lucide-react';
 import { ReferenceProviderId } from '../types';
 import { CreativeEngine } from '../lib/creativeEngine';
 import { ReferenceEngine } from '../lib/referenceEngine';
 import { fetchProviderStatuses } from '../lib/api';
+import { isCloudBackupConfigured, getCloudSyncState } from '../lib/cloudBackup';
 
 interface SettingsViewProps {
   onBack: () => void;
@@ -221,6 +225,69 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 </div>
               </div>
               {selectedReferenceProvider === 'upload' && <Check size={16} className="text-[#D4AF37]" />}
+            </div>
+          </div>
+        </div>
+
+        {/* ========================================================
+            STORAGE & OPTIONAL CLOUD SYNC ARCHITECTURE
+            ======================================================== */}
+        <div className="bg-[#141414] border border-[#262626] rounded-2xl p-6 sm:p-8 shadow-xl">
+          <div className="flex items-center justify-between border-b border-[#222] pb-5 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[#D4AF37]/10 border border-[#D4AF37]/30 flex items-center justify-center text-[#D4AF37]">
+                <HardDrive size={20} />
+              </div>
+              <div>
+                <h2 className="text-lg font-light text-white tracking-tight">Storage & Offline Architecture</h2>
+                <p className="text-xs text-[#A1A1AA] mt-0.5">Local-first persistence with optional cloud backup</p>
+              </div>
+            </div>
+
+            <span
+              className={`text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full flex items-center gap-1.5 border ${
+                isCloudBackupConfigured()
+                  ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50'
+                  : 'bg-zinc-900 text-zinc-400 border-zinc-700/50'
+              }`}
+            >
+              {isCloudBackupConfigured() ? (
+                <>
+                  <Cloud size={12} /> SUPABASE SYNC ACTIVE
+                </>
+              ) : (
+                <>
+                  <HardDrive size={12} /> LOCAL INDEXEDDB ONLY
+                </>
+              )}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+            <div className="bg-[#191919] border border-[#2B2B2B] rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Database size={16} className="text-[#D4AF37]" />
+                <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#D4AF37]">
+                  Primary Source of Truth
+                </span>
+              </div>
+              <p className="text-sm font-medium text-white mb-1">IndexedDB & localStorage</p>
+              <p className="text-xs text-[#888] leading-relaxed">
+                All event metadata, photos, generated visual cards, and color recipes are preserved on-device. Zero cloud latency and full offline capability on shoots.
+              </p>
+            </div>
+
+            <div className="bg-[#191919] border border-[#2B2B2B] rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Cloud size={16} className="text-[#D4AF37]" />
+                <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#D4AF37]">
+                  Optional Cloud Backup
+                </span>
+              </div>
+              <p className="text-sm font-medium text-white mb-1">Supabase Storage & PostgreSQL</p>
+              <p className="text-xs text-[#888] leading-relaxed">
+                Asynchronous, non-blocking backup. Configured via <code className="text-[#D4AF37] font-mono text-[10px]">VITE_SUPABASE_URL</code> and <code className="text-[#D4AF37] font-mono text-[10px]">VITE_SUPABASE_ANON_KEY</code>.
+              </p>
             </div>
           </div>
         </div>

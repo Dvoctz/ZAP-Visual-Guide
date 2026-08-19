@@ -3,6 +3,7 @@ import { ViewState, ShootEvent, EVENT_TYPES, BRIDE_OUTFIT_TYPES, GROOM_OUTFIT_TY
 import { getEvents, saveEvent, getEvent, deleteEvent, getActiveEventId, setActiveEventId, updateEvent, hydrateEventImages } from './lib/storage';
 import { generateShootGuide, generateOpenAIPoseReference } from './lib/api';
 import { saveImageToDB } from './lib/imageStorage';
+import { backupEvent, backupFullEvent, backupPoseReference, subscribeCloudSyncState, getCloudSyncState, CloudSyncState } from './lib/cloudBackup';
 import { CreativeEngine } from './lib/creativeEngine';
 import { ReferenceEngine, getEffectiveBrideOutfit, getEffectiveGroomOutfit } from './lib/referenceEngine';
 import { ReferenceEngineModal } from './components/ReferenceEngineModal';
@@ -10,7 +11,7 @@ import { PoseEditModal } from './components/PoseEditModal';
 import { SettingsView } from './components/SettingsView';
 import { EnvironmentSection } from './components/EnvironmentSection';
 import { ColorStyleView } from './components/ColorStyleView';
-import { ArrowLeft, Trash2, MapPin, Clock, Sun, Image as ImageIcon, Palette, Plus, Camera, Sparkles, ChevronLeft, ChevronRight, X, Check, Edit2, MoveUp, MoveDown, RefreshCw, Menu, Upload, ZoomIn, CheckCircle2, AlertCircle, Play, Pause, Shirt, User } from 'lucide-react';
+import { ArrowLeft, Trash2, MapPin, Clock, Sun, Image as ImageIcon, Palette, Plus, Camera, Sparkles, ChevronLeft, ChevronRight, X, Check, Edit2, MoveUp, MoveDown, RefreshCw, Menu, Upload, ZoomIn, CheckCircle2, AlertCircle, Play, Pause, Shirt, User, Cloud } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
@@ -19,6 +20,13 @@ export default function App() {
   const [currentView, setCurrentView] = useState<ViewState>({ name: 'home' });
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [deleteConfirmEventId, setDeleteConfirmEventId] = useState<string | null>(null);
+  const [cloudSync, setCloudSync] = useState<CloudSyncState>(getCloudSyncState());
+
+  // Subscribe to optional non-blocking cloud backup state
+  useEffect(() => {
+    const unsubscribe = subscribeCloudSyncState(setCloudSync);
+    return unsubscribe;
+  }, []);
 
   // Load events on mount and hydrate images from IndexedDB
   useEffect(() => {
@@ -48,6 +56,8 @@ export default function App() {
     saveEvent(event);
     setEvents((prev) => [event, ...prev].sort((a, b) => b.createdAt - a.createdAt));
     setActiveEvent(event.id);
+    // Non-blocking asynchronous cloud backup
+    backupFullEvent(event).catch(console.warn);
   };
 
   const setActiveEvent = (id: string | null, preserveSubView = false) => {
@@ -88,7 +98,15 @@ export default function App() {
   const handleUpdateEvent = (id: string, updates: Partial<ShootEvent>) => {
     updateEvent(id, updates);
     setEvents((prev) =>
-      prev.map((e) => (e.id === id ? { ...e, ...updates } : e))
+      prev.map((e) => {
+        if (e.id === id) {
+          const merged = { ...e, ...updates };
+          // Non-blocking asynchronous cloud backup
+          backupEvent(merged).catch(console.warn);
+          return merged;
+        }
+        return e;
+      })
     );
   };
 
@@ -191,6 +209,41 @@ export default function App() {
 
         {/* Right Header Actions */}
         <div className="flex gap-2.5 md:gap-4 items-center">
+          {/* Cloud Sync Status Indicator */}
+          {cloudSync.isConfigured && (
+            <div
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border ${
+                cloudSync.status === 'syncing'
+                  ? 'bg-[#D4AF37]/10 text-[#D4AF37] border-[#D4AF37]/30 animate-pulse'
+                  : cloudSync.status === 'synced'
+                  ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
+                  : cloudSync.status === 'error'
+                  ? 'bg-amber-950/30 text-amber-400 border-amber-800/30'
+                  : 'bg-[#1A1A1A] text-[#888] border-[#2A2A2A]'
+              }`}
+              title={
+                cloudSync.status === 'syncing'
+                  ? 'Syncing to Supabase cloud backup...'
+                  : cloudSync.status === 'synced'
+                  ? 'Cloud backup up to date'
+                  : cloudSync.status === 'error'
+                  ? `Cloud sync notice: ${cloudSync.errorMessage || 'Using local storage'}`
+                  : 'Cloud backup configured'
+              }
+            >
+              <Cloud size={12} className={cloudSync.status === 'syncing' ? 'animate-spin' : ''} />
+              <span>
+                {cloudSync.status === 'syncing'
+                  ? 'Cloud Syncing'
+                  : cloudSync.status === 'synced'
+                  ? 'Cloud Saved'
+                  : cloudSync.status === 'error'
+                  ? 'Local Mode'
+                  : 'Cloud Backup'}
+              </span>
+            </div>
+          )}
+
           <button
             onClick={() => {
               setActiveEvent(null);
@@ -1058,19 +1111,26 @@ function PosingGuideView({
 
         // Update pose in event
         if (event.poses) {
+          let updatedPose: Pose | null = null;
           const newPoses = event.poses.map((p) => {
             if (p.id === pose.id) {
-              return {
+              updatedPose = {
                 ...p,
                 aiReference: result.referenceImage,
                 referenceImage: result.referenceImage.url,
                 activeReferenceType: 'ai' as const,
                 instructionsChanged: false,
               };
+              return updatedPose;
             }
             return p;
           });
           onUpdate({ poses: newPoses });
+
+          // Non-blocking asynchronous cloud backup
+          if (updatedPose) {
+            backupPoseReference(event.id, updatedPose, result.referenceImage).catch(console.warn);
+          }
         }
       }
     } catch (err: any) {
@@ -1103,19 +1163,26 @@ function PosingGuideView({
       await saveImageToDB(`${event.id}_${targetPose.id}_active`, uploadedRef.url);
 
       if (event.poses) {
+        let updatedPose: Pose | null = null;
         const newPoses = event.poses.map((p) => {
           if (p.id === targetPose.id) {
-            return {
+            updatedPose = {
               ...p,
               uploadedReference: uploadedRef,
               referenceImage: uploadedRef.url,
               activeReferenceType: 'upload' as const,
               instructionsChanged: false,
             };
+            return updatedPose;
           }
           return p;
         });
         onUpdate({ poses: newPoses });
+
+        // Non-blocking asynchronous cloud backup
+        if (updatedPose) {
+          backupPoseReference(event.id, updatedPose, uploadedRef).catch(console.warn);
+        }
       }
     } catch (err: any) {
       console.error('Error uploading pose reference:', err);
@@ -1139,19 +1206,26 @@ function PosingGuideView({
       await saveImageToDB(`${event.id}_${targetPose.id}_active`, refData.url);
 
       if (event.poses) {
+        let updatedPose: Pose | null = null;
         const newPoses = event.poses.map((p) => {
           if (p.id === targetPose.id) {
-            return {
+            updatedPose = {
               ...p,
               aiReference: refData,
               referenceImage: refData.url,
               activeReferenceType: 'ai' as const,
               instructionsChanged: false,
             };
+            return updatedPose;
           }
           return p;
         });
         onUpdate({ poses: newPoses });
+
+        // Non-blocking asynchronous cloud backup
+        if (updatedPose) {
+          backupPoseReference(event.id, updatedPose, refData).catch(console.warn);
+        }
       }
     } catch (err: any) {
       console.error('Error attaching AI pose reference:', err);

@@ -21,6 +21,7 @@ import {
 import { ShootEvent, Pose, ColorRecipe, ColorStyle } from '../types';
 import { CreativeEngine } from '../lib/creativeEngine';
 import { analyzeColorPreset } from '../lib/api';
+import { backupColorRecipe } from '../lib/cloudBackup';
 import {
   validateColorRecipe,
   generateLightroomXmp,
@@ -239,6 +240,8 @@ export function ColorStyleView({ event, onBack, onNavigate, onUpdate }: ColorSty
         });
 
         console.log('[ColorPreset] Successfully generated and stored recipe for pose:', activeRef.poseId);
+        // Non-blocking asynchronous cloud backup
+        backupColorRecipe(event.id, validation.recipe, activeRef.poseId).catch(console.warn);
       } else {
         // Event narrative & lighting analysis
         console.log('[ColorPreset] Analyzing event lighting & narrative for:', event.name);
@@ -266,6 +269,9 @@ export function ColorStyleView({ event, onBack, onNavigate, onUpdate }: ColorSty
           eventColorRecipe: validation.recipe,
           colorRecipe: validation.recipe,
         });
+
+        // Non-blocking asynchronous cloud backup
+        backupColorRecipe(event.id, validation.recipe).catch(console.warn);
       }
     } catch (err: any) {
       console.error('[ColorPreset] Failed to generate Lightroom preset:', err);
