@@ -352,6 +352,9 @@ function normalizeImageDataUrl(raw: unknown): string | null {
     return trimmed;
   }
 
+  // If it's a data URL, we trust it and let OpenAI handle any MIME mismatch,
+  // except we will gracefully fallback to detecting the signature if OpenAI complains.
+  // Actually, we must fix the MIME type if the AI generator gave us a wrong one.
   let isDataUrl = false;
   let originalMime = '';
   let base64Payload = trimmed;
@@ -371,6 +374,7 @@ function normalizeImageDataUrl(raw: unknown): string | null {
     }
   }
 
+  // Strip whitespaces securely
   base64Payload = base64Payload.replace(/[\s\r\n\t]/g, '');
 
   if (base64Payload.startsWith('/9j')) {
@@ -383,8 +387,10 @@ function normalizeImageDataUrl(raw: unknown): string | null {
     return `data:image/webp;base64,${base64Payload}`;
   }
 
-  if (isDataUrl && originalMime) {
-    return `data:${originalMime};base64,${base64Payload}`;
+  // If it is a data URL but we couldn't detect the magic bytes,
+  // just return it as is and let OpenAI validate it.
+  if (isDataUrl) {
+    return trimmed; 
   }
 
   return null;
@@ -447,13 +453,16 @@ const COLOR_RECIPE_JSON_SCHEMA = `{
 // Analyze Color Preset with GPT-4o (Vision or Event Narrative)
 app.post(['/api/analyze-color-preset', '/analyze-color-preset'], async (req, res) => {
   try {
+    console.log('[ColorPreset Trace] Route hit. Body keys:', Object.keys(req.body));
     const rawImage =
       req.body.image ??
       req.body.imageBase64 ??
       req.body.imageDataUrl ??
       req.body.imageUrl;
 
+    console.log('[ColorPreset Trace] rawImage length:', rawImage ? rawImage.length : 0);
     const normalizedImageUrl = normalizeImageDataUrl(rawImage);
+    console.log('[ColorPreset Trace] normalized:', !!normalizedImageUrl);
     if (rawImage && rawImage !== 'indexeddb' && !normalizedImageUrl) {
       return res.status(400).json({ error: 'The provided image is in an unsupported format or could not be recognized. Supported formats: JPEG, PNG, WEBP.' });
     }

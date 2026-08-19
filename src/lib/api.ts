@@ -217,6 +217,49 @@ export async function generateShootGuide(event: ShootEvent): Promise<{
   };
 }
 
+async function compressImage(dataUrl: string, maxSize = 1024): Promise<string> {
+  if (!dataUrl.startsWith('data:image/')) return dataUrl;
+  
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+      
+      if (width <= maxSize && height <= maxSize) {
+        resolve(dataUrl);
+        return;
+      }
+      
+      if (width > height) {
+        if (width > maxSize) {
+          height = Math.round((height * maxSize) / width);
+          width = maxSize;
+        }
+      } else {
+        if (height > maxSize) {
+          width = Math.round((width * maxSize) / height);
+          height = maxSize;
+        }
+      }
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(dataUrl);
+        return;
+      }
+      
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', 0.8));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 export async function analyzeColorPreset(params: {
   event: ShootEvent;
   image?: string;
@@ -227,7 +270,11 @@ export async function analyzeColorPreset(params: {
     imageUrl?: string;
   };
 }): Promise<{ success: boolean; recipe: any }> {
-  const imageDataUrl = params.image || undefined;
+  let imageDataUrl = params.image || undefined;
+  
+  if (imageDataUrl && imageDataUrl.startsWith('data:image/')) {
+    imageDataUrl = await compressImage(imageDataUrl, 1024);
+  }
 
   const response = await fetch('/api/analyze-color-preset', {
     method: 'POST',
@@ -252,9 +299,16 @@ export async function analyzeColorPreset(params: {
   if (!response.ok) {
     let errorMsg = 'Failed to analyze color preset';
     try {
-      const errData = await response.json();
-      if (errData?.error) {
-        errorMsg = errData.error;
+      const text = await response.text();
+      console.error('[ColorPreset Trace] HTTP Status:', response.status);
+      console.error('[ColorPreset Trace] Raw response:', text.substring(0, 500));
+      try {
+        const errData = JSON.parse(text);
+        if (errData?.error) {
+          errorMsg = errData.error;
+        }
+      } catch (e) {
+        errorMsg = `Server error (${response.status}): ` + text.substring(0, 100);
       }
     } catch {
       // fallback
