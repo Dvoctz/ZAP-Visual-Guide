@@ -196,11 +196,14 @@ export async function analyzeColorPreset(params: {
     imageUrl?: string;
   };
 }): Promise<{ success: boolean; recipe: any }> {
+  const imageDataUrl = params.image || undefined;
+
   const response = await fetch('/api/analyze-color-preset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      image: params.image,
+      image: imageDataUrl,
+      imageBase64: imageDataUrl,
       event: {
         name: params.event.name,
         type: params.event.type === 'Custom' ? params.event.customType : params.event.type,
@@ -228,6 +231,11 @@ export async function analyzeColorPreset(params: {
     throw new Error(errorMsg);
   }
 
-  return response.json();
+  const data = await response.json();
+  if (!data || !data.recipe) {
+    throw new Error('Server did not return a valid color preset recipe.');
+  }
+
+  return data;
 }
 

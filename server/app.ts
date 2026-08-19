@@ -255,66 +255,205 @@ app.post(['/api/generate-guide', '/generate-guide'], async (req, res) => {
   }
 });
 
-// Analyze Color Preset with GPT-4o Vision
-app.post(['/api/analyze-color-preset', '/analyze-color-preset'], async (req, res) => {
-  try {
-    const { imageBase64, eventTitle } = req.body;
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'Image base64 data is required' });
-    }
+function normalizeImageDataUrl(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
 
-    const client = getOpenAIClient();
+  if (trimmed.startsWith('data:image/')) {
+    return trimmed;
+  }
 
-    const prompt = `Analyze this reference photograph to extract its cinematic color grading profile, exposure characteristics, tone curve, and HSL palette for professional photography grading.
-Return JSON with this schema:
-{
-  "name": string,
-  "description": string,
-  "dominantTones": [string],
-  "contrast": "low" | "medium" | "high",
-  "saturation": "muted" | "natural" | "vibrant",
-  "colorTemperature": "warm" | "neutral" | "cool",
-  "keyCharacteristics": [string],
-  "lightroomSuggestions": {
-    "exposure": number,
-    "contrast": number,
-    "highlights": number,
-    "shadows": number,
-    "whites": number,
-    "blacks": number,
-    "temp": number,
-    "tint": number,
-    "vibrance": number,
-    "saturation": number
+  // Handle raw base64 data strings
+  if (trimmed.startsWith('/9j/')) {
+    return `data:image/jpeg;base64,${trimmed}`;
+  }
+  if (trimmed.startsWith('iVBORw0KGgo')) {
+    return `data:image/png;base64,${trimmed}`;
+  }
+  if (trimmed.startsWith('UklGR')) {
+    return `data:image/webp;base64,${trimmed}`;
+  }
+
+  // Default raw base64 fallback
+  return `data:image/jpeg;base64,${trimmed}`;
+}
+
+const COLOR_RECIPE_JSON_SCHEMA = `{
+  "presetName": "string (e.g. ZAP - Golden Hour Cinematic)",
+  "description": "string (Brief description of the color profile and tonal intent)",
+  "whiteBalance": {
+    "mode": "Custom",
+    "temperature": 5600,
+    "tint": 6
+  },
+  "basic": {
+    "exposure": 0.1,
+    "contrast": 10,
+    "highlights": -15,
+    "shadows": 20,
+    "whites": -5,
+    "blacks": 8,
+    "texture": 5,
+    "clarity": 3,
+    "dehaze": 2,
+    "vibrance": 12,
+    "saturation": -3
+  },
+  "toneCurve": {
+    "rgb": [{"x": 0, "y": 10}, {"x": 64, "y": 60}, {"x": 192, "y": 196}, {"x": 255, "y": 250}],
+    "red": [{"x": 0, "y": 0}, {"x": 255, "y": 255}],
+    "green": [{"x": 0, "y": 0}, {"x": 255, "y": 255}],
+    "blue": [{"x": 0, "y": 0}, {"x": 255, "y": 255}]
+  },
+  "colorMixer": {
+    "red": { "hue": 2, "saturation": -4, "luminance": 4 },
+    "orange": { "hue": 3, "saturation": -2, "luminance": 6 },
+    "yellow": { "hue": -6, "saturation": -10, "luminance": 4 },
+    "green": { "hue": 12, "saturation": -22, "luminance": -8 },
+    "aqua": { "hue": 4, "saturation": -12, "luminance": -3 },
+    "blue": { "hue": -5, "saturation": -16, "luminance": -5 },
+    "purple": { "hue": 0, "saturation": -15, "luminance": 0 },
+    "magenta": { "hue": 0, "saturation": -15, "luminance": 0 }
+  },
+  "colorGrading": {
+    "shadows": { "hue": 215, "saturation": 10, "luminance": -2 },
+    "midtones": { "hue": 42, "saturation": 8, "luminance": 2 },
+    "highlights": { "hue": 36, "saturation": 12, "luminance": 0 },
+    "blending": 50,
+    "balance": 0
+  },
+  "detail": {
+    "grainAmount": 15,
+    "grainSize": 25,
+    "grainRoughness": 40
+  },
+  "effects": {
+    "vignette": -5
   }
 }`;
 
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            {
-              type: 'image_url',
-              image_url: {
-                url: imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`,
-                detail: 'high',
-              },
-            },
-          ],
-        },
-      ],
-      response_format: { type: 'json_object' },
-      max_tokens: 1200,
-    });
+// Analyze Color Preset with GPT-4o (Vision or Event Narrative)
+app.post(['/api/analyze-color-preset', '/analyze-color-preset'], async (req, res) => {
+  try {
+    const rawImage =
+      req.body.image ??
+      req.body.imageBase64 ??
+      req.body.imageDataUrl ??
+      req.body.imageUrl;
 
-    const parsed = JSON.parse(response.choices[0]?.message?.content || '{}');
-    res.json({ success: true, analysis: parsed });
+    const normalizedImageUrl = normalizeImageDataUrl(rawImage);
+    const { event, colorStyle, sourceInfo } = req.body;
+
+    const client = getOpenAIClient();
+
+    let response;
+
+    if (normalizedImageUrl) {
+      // Vision Multimodal Analysis
+      const visionPrompt = `You are a master colorist and photographer developing a professional Adobe Lightroom develop preset (.XMP) based on this visual reference image.
+Event Context:
+- Name: ${event?.name || 'Editorial Shoot'}
+- Type: ${event?.type || 'Portrait Shoot'}
+- Location: ${event?.location || 'Scenic'}
+- Style: ${event?.style || colorStyle?.name || 'Cinematic'}
+- Time of Day: ${event?.timeOfDay || 'Daylight'}
+
+Analyze the visual reference photo and formulate a complete, production-grade ColorRecipe for Lightroom:
+1. White Balance: Choose realistic Kelvin temperature (2000K to 12000K, typical daylight 5200K-5800K, tungsten 3000K-3400K, golden hour 5800K-6500K) and tint (-150 to +150).
+2. Basic Tonal & Exposure: Balanced exposure offset (-2.0 to +2.0), contrast (-50 to +50), highlight roll-off, shadow lift, blacks, texture, clarity, dehaze, vibrance, saturation.
+3. HSL Color Mixer: Protect natural orange skin tones with gentle adjustments. Fine-tune foliage greens, sky/water blues, and ambient warm yellows.
+4. Color Grading (3-Way Split Toning): Harmonious cinematic color wheel hues (0-360) and saturations (0-100) for shadows, midtones, and highlights.
+5. Film Character Detail: Subtle organic grain and vignette.
+
+Return ONLY a valid JSON object strictly matching this schema:
+${COLOR_RECIPE_JSON_SCHEMA}`;
+
+      response = await client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: visionPrompt },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: normalizedImageUrl,
+                  detail: 'high',
+                },
+              },
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 1600,
+      });
+    } else {
+      // Event Narrative / Metadata Analysis (no reference image provided)
+      const eventPrompt = `You are a master colorist and photographer developing a professional Adobe Lightroom develop preset (.XMP) tailored for this photography event:
+Event Name: ${event?.name || 'Editorial Shoot'}
+Event Type: ${event?.type || 'Portrait Shoot'}
+Location: ${event?.location || 'Scenic'}
+Style / Look: ${event?.style || colorStyle?.name || 'Cinematic'}
+Time of Day / Lighting: ${event?.timeOfDay || 'Natural Golden Hour'}
+Overall Look: ${event?.description || colorStyle?.overallLook || 'Cinematic, rich tones with authentic skin textures'}
+Film Character: ${colorStyle?.filmCharacter || 'Subtle film grain with soft highlight compression'}
+Editing Notes: ${colorStyle?.editingNotes || 'Preserve radiant skin tones with clean shadow roll-off'}
+
+Formulate a complete, production-grade ColorRecipe for Lightroom:
+1. White Balance: Choose realistic Kelvin temperature (2000K to 12000K) and tint (-150 to +150) suited to the event lighting and mood.
+2. Basic Tonal & Exposure: Balanced exposure offset, contrast, highlight roll-off, shadow lift, blacks, texture, clarity, dehaze, vibrance, saturation.
+3. HSL Color Mixer: Protected radiant orange skin tones, refined foliage greens and sky blues.
+4. Color Grading (3-Way Split Toning): Harmonious cinematic color wheel hues and saturations for shadows, midtones, highlights.
+5. Film Character Detail: Organic grain and subtle vignette.
+
+Return ONLY a valid JSON object strictly matching this schema:
+${COLOR_RECIPE_JSON_SCHEMA}`;
+
+      response = await client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: eventPrompt }],
+          },
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 1600,
+      });
+    }
+
+    const rawContent = response.choices[0]?.message?.content || '{}';
+    let parsedRecipe: any;
+    try {
+      parsedRecipe = JSON.parse(rawContent);
+    } catch (parseErr) {
+      console.error('Failed to parse OpenAI ColorRecipe JSON:', rawContent);
+      return res.status(500).json({ error: 'Invalid ColorRecipe JSON returned by OpenAI' });
+    }
+
+    if (!parsedRecipe || typeof parsedRecipe !== 'object') {
+      return res.status(500).json({ error: 'Invalid ColorRecipe returned by OpenAI' });
+    }
+
+    // Attach metadata and sourceInfo
+    parsedRecipe.sourceInfo = sourceInfo || (normalizedImageUrl ? {
+      type: 'approved_reference',
+      title: event?.name ? `${event.name} Reference` : 'Visual Reference',
+    } : {
+      type: 'event_style',
+      title: event?.name ? `${event.name} Aesthetic` : 'Event Aesthetic',
+    });
+    parsedRecipe.generatedAt = new Date().toISOString();
+
+    return res.json({
+      success: true,
+      recipe: parsedRecipe,
+    });
   } catch (error: any) {
     console.error('Analyze Color Preset Error:', error);
-    res.status(500).json({ error: sanitizeError(error?.message || 'Failed to analyze color preset.') });
+    return res.status(500).json({ error: sanitizeError(error?.message || 'Failed to analyze color preset.') });
   }
 });
 
